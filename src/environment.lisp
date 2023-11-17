@@ -27,7 +27,10 @@
   (resources (make-hash-table))
   ;; Debugging
   (debug-key-pressed nil)
-  (red-screen nil))
+  (red-screen nil)
+  ;; copy-pixels support
+  (fbo nil)
+  (rbo nil))
 
 (defparameter *env* nil)
 
