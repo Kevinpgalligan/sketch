@@ -26,11 +26,9 @@
 (defparameter *default-height* 400
   "The default height of sketch window")
 
-(defparameter *restart-frames* 2)
-
 (defclass sketch (kit.sdl2:gl-window)
   ((%env :initform (make-env) :reader sketch-%env)
-   (%restart :initform *restart-frames*)
+   (%restart :initform t)
    (%viewport-changed :initform t)
    (%entities :initform (make-hash-table) :accessor sketch-%entities)
    (title :initform "Sketch" :accessor sketch-title :initarg :title)
@@ -118,7 +116,7 @@
     ((instance sketch) added-slots discarded-slots property-list &rest initargs)
   (declare (ignore added-slots discarded-slots property-list))
   (apply #'prepare instance initargs)
-  (setf (slot-value instance '%restart) *restart-frames*)
+  (setf (slot-value instance '%restart) t)
   (setf (slot-value instance '%entities) (make-hash-table)))
 
 ;;; Rendering
@@ -133,7 +131,7 @@
          (with-font (make-error-font)
            (with-identity-matrix
              (text (format nil "ERROR~%---~%~a~%---~%Click for restarts." e) 20 20)))
-         (setf %restart *restart-frames*
+         (setf %restart t
                (env-red-screen *env*) t)))))
 
 (defun draw-window (window)
@@ -159,13 +157,12 @@
       (unless copy-pixels
         (background (gray 0.4)))
       ;; Restart sketch on setup and when recovering from an error.
-      (when (> %restart 0)
-        (decf %restart)
-        (when (zerop %restart)
-          (gl-catch (rgb 1 1 0.3)
-            (start-draw)
-            (setup instance)
-            (end-draw))))
+      (when %restart
+        (gl-catch (rgb 1 1 0.3)
+          (start-draw)
+          (setup instance)
+          (end-draw))
+        (setf %restart nil))
       ;; If we're in the debug mode, we exit from it immediately,
       ;; so that the restarts are shown only once. Afterwards, we
       ;; continue presenting the user with the red screen, waiting for
@@ -179,12 +176,15 @@
 
 ;;; Support for resizable windows
 
+(defmethod kit.sdl2:window-event :around ((window sketch) (type (eql :exposed)) timestamp data1 data2)
+  ;; This overwrites the default behaviour of sdl2kit, which triggers a render that we don't want.
+  )
+
 (defmethod kit.sdl2:window-event :before ((instance sketch) (type (eql :size-changed)) timestamp data1 data2)
   (with-slots ((env %env) width height y-axis) instance
     (setf width data1
           height data2)
-    (initialize-view-matrix instance))
-  (kit.sdl2:render instance))
+    (initialize-view-matrix instance)))
 
 ;;; Default events
 
@@ -233,6 +233,23 @@
          *sketch*
        ,@body)))
 
+(defun define-sketch-initialize-instance (name bindings)
+  `(defmethod initialize-instance :around
+       ((*sketch* ,name)
+        &key ,@(loop for b in bindings
+                     collect `((,(binding-initarg b) ,(binding-name b))
+                               ;; Always use the initform here, we can't
+                               ;; call the accessor on the instance because,
+                               ;; this being an ":around" method, the slots
+                               ;; haven't been initialized yet.
+                               ,(binding-initform b)))
+        &allow-other-keys)
+     (declare (ignorable ,@(loop for b in bindings collect (binding-name b))))
+     ;; Pass :w and :h so that the SDL2 window is created with the correct
+     ;; dimensions and we avoid a resize. Relying on the bindings for WIDTH
+     ;; and HEIGHT to be available.
+     (call-next-method :w width :h height)))
+
 (defun define-sketch-prepare-method (name bindings)
   `(defmethod prepare ((*sketch* ,name)
                        &key ,@(loop for b in bindings
@@ -251,6 +268,7 @@
     `(progn
        ,(define-sketch-defclass sketch-name bindings)
        ,@(define-sketch-channel-observers bindings)
+       ,(define-sketch-initialize-instance sketch-name bindings)
        ,(define-sketch-prepare-method sketch-name bindings)
        ,(define-sketch-draw-method sketch-name bindings body)
 
