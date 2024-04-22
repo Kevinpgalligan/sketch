@@ -93,28 +93,34 @@
   (declare (ignore win))
   (with-slots ((env %env)) instance
     (with-slots (fbo rbo) env
-      (when (and fbo (not value))
-        (gl:delete-framebuffers (vector fbo))
-        (gl:delete-renderbuffers (vector rbo))
-        (setf fbo nil rbo nil))
-      (when (and (not fbo) value)
-        (setf fbo (gl:gen-framebuffer)
-              rbo (gl:gen-renderbuffer))
-        (gl:bind-framebuffer :framebuffer fbo)
-        (gl:bind-renderbuffer :renderbuffer rbo)
-        (gl:renderbuffer-storage :renderbuffer
-                                 :rgba32f
-                                 (sketch-width instance)
-                                 (sketch-height instance))
-        (gl:framebuffer-renderbuffer :framebuffer :color-attachment0 :renderbuffer rbo)
-        (unless (= (cffi:foreign-enum-value '%gl:enum (gl:check-framebuffer-status :framebuffer))
-                   (cffi:foreign-enum-value '%gl:enum :framebuffer-complete))
-          (warn "Couldn't create FBO, COPY-PIXELS might not work.")
-          (gl:delete-framebuffers (vector fbo))
-          (gl:delete-renderbuffers (vector rbo))
-          (setf fbo nil rbo nil))
-        (gl:bind-framebuffer :framebuffer 0)
-        (gl:bind-renderbuffer :renderbuffer 0)))))
+      (cond
+        ((and fbo (not value))
+         (gl:delete-framebuffers (vector fbo))
+         (gl:delete-renderbuffers (vector rbo))
+         (setf fbo nil rbo nil))
+        ((and (not fbo) value)
+         (setf fbo (gl:gen-framebuffer)
+               rbo (gl:gen-renderbuffer))
+         (gl:bind-framebuffer :framebuffer fbo)
+         (gl:bind-renderbuffer :renderbuffer rbo)
+         (gl:renderbuffer-storage :renderbuffer
+                                  :rgba32f
+                                  (sketch-width instance)
+                                  (sketch-height instance))
+         (gl:framebuffer-renderbuffer :framebuffer
+                                      :color-attachment0
+                                      :renderbuffer
+                                      rbo)
+         (unless (= (cffi:foreign-enum-value
+                     '%gl:enum (gl:check-framebuffer-status :framebuffer))
+                    (cffi:foreign-enum-value '%gl:enum :framebuffer-complete))
+           (warn "Couldn't create FBO, COPY-PIXELS might not work.")
+           (gl:delete-framebuffers (vector fbo))
+           (gl:delete-renderbuffers (vector rbo))
+           (setf fbo nil
+                 rbo nil))
+         (gl:bind-framebuffer :framebuffer 0)
+         (gl:bind-renderbuffer :renderbuffer 0))))))
 
 ;;; Generic functions
 
@@ -247,15 +253,19 @@
       (gl:viewport 0 0 width height)
       (setf %viewport-changed nil))))
 
+(defun copying-pixels-p (sketch)
+  (and (sketch-copy-pixels sketch) (env-fbo *env*)))
+
 (defmethod kit.sdl2:render ((win sketch-window) &aux (sketch (%sketch win)))
   (maybe-change-viewport sketch)
   (with-sketch (sketch)
     (with-gl-draw
         (with-error-handling (sketch)
-          (when (and copy-pixels (env-fbo *env*))
-            (gl:bind-framebuffer :framebuffer (env-fbo *env*)))  
-          (unless (sketch-copy-pixels sketch)
-            (background (gray 0.4)))
+          (cond
+            ((copying-pixels-p sketch)
+             (gl:bind-framebuffer :framebuffer (env-fbo *env*)))
+            ((not (sketch-copy-pixels sketch))
+             (background (gray 0.4))))
           (when (or (env-red-screen *env*)
                     (not (sketch-%setup-called sketch)))
             (setf (env-red-screen *env*) nil
@@ -264,7 +274,7 @@
               (setup sketch)))
           (with-stage :draw
             (draw sketch))
-          (when (and copy-pixels (env-fbo *env*))
+          (when (copying-pixels-p sketch)
             (gl:bind-framebuffer :framebuffer 0)
             (gl:clear-color 0.0 0.0 0.0 1.0)
             (gl:clear :color-buffer)
