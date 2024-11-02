@@ -182,6 +182,8 @@
            :make-canvas
            :canvas-reset
            :canvas-paint
+           :canvas-paint-rgba255
+           :canvas-paint-gray255
            :canvas-image
            :canvas-lock
            :canvas-unlock
