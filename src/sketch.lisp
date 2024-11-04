@@ -47,7 +47,8 @@
    (y-axis :initform :down :accessor sketch-y-axis :initarg :y-axis)
    (close-on :initform :escape :accessor sketch-close-on :initarg :close-on)
    (restart-on-change :initform nil :accessor sketch-restart-on-change
-                      :initarg :restart-on-change)))
+                      :initarg :restart-on-change)
+   (restart-on :initform :f1 :accessor sketch-restart-on :initarg :restart-on)))
 
 (defclass sketch-window (kit.sdl2:gl-window)
   ((%sketch
@@ -159,11 +160,13 @@
     ((instance sketch) added-slots discarded-slots property-list &rest initargs)
   (declare (ignore added-slots discarded-slots property-list))
   (if (sketch-restart-on-change instance)
-      (progn
-        (apply #'prepare instance initargs)
-        (setf (sketch-%setup-called instance) nil)
-        (setf (slot-value instance '%entities) (make-hash-table)))
+      (restart-sketch instance initargs)
       (set-tweakable-slots instance)))
+
+(defun restart-sketch (instance initargs)
+  (apply #'prepare instance initargs)
+  (setf (sketch-%setup-called instance) nil)
+  (setf (slot-value instance '%entities) (make-hash-table)))
 
 ;;; Error handling
 
@@ -273,8 +276,13 @@
 (defmethod kit.sdl2:keyboard-event :before ((instance sketch) state timestamp repeatp keysym)
   (declare (ignorable timestamp repeatp))
   (alexandria:when-let (close-on (sketch-close-on instance))
-    (when (and (eql state :keyup) (eq (without-sdl2-scancode-prefix keysym) close-on))
-      (kit.sdl2:close-window instance))))
+    (when (and (eql state :keyup)
+               (eq (without-sdl2-scancode-prefix keysym) close-on))
+      (kit.sdl2:close-window instance)))
+  (alexandria:when-let (restart-on (sketch-restart-on instance))
+    (when (and (eql state :keyup)
+               (eq (without-sdl2-scancode-prefix keysym) restart-on))
+      (restart-sketch instance nil))))
 
 (defmethod close-window :before ((instance sketch-window))
   (with-environment (slot-value (%sketch instance) '%env)
