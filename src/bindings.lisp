@@ -22,7 +22,8 @@
    (initarg :initarg :initarg :accessor binding-initarg)
    (accessor :initarg :accessor :accessor binding-accessor)
    (channelp :initarg :channelp :accessor binding-channelp)
-   (channel-name :initarg :channel-name :accessor binding-channel-name)))
+   (channel-name :initarg :channel-name :accessor binding-channel-name)
+   (tweakable :initarg :tweakable :accessor binding-tweakable)))
 
 (defun make-binding (name prefix
                      &key
@@ -32,7 +33,8 @@
                        (initarg (alexandria:make-keyword name))
                        (accessor (make-accessor name prefix package))
                        (channel-name nil)
-                       (channelp (and channel-name t)))
+                       (channelp (and channel-name t))
+                       (tweakable nil))
   (make-instance 'binding :name name
                           :prefix prefix
                           :package package
@@ -41,7 +43,8 @@
                           :initarg initarg
                           :accessor accessor
                           :channel-name channel-name
-                          :channelp channelp))
+                          :channelp channelp
+                          :tweakable tweakable))
 
 (defun make-accessor (name prefix package)
   (let ((symbol (alexandria:symbolicate prefix '#:- name)))
@@ -58,11 +61,13 @@
                        (initarg (binding-initarg binding))
                        (accessor (binding-accessor binding))
                        (channel-name (binding-channel-name binding))
-                       (channelp (and channel-name t)))
+                       (channelp (and channel-name t))
+                       (tweakable (binding-tweakable binding)))
   (make-instance 'binding
                  :name name :prefix prefix :initform initform
                  :defaultp defaultp :initarg initarg :accessor accessor
-                 :channelp channelp :channel-name channel-name))
+                 :channelp channelp :channel-name channel-name
+                 :tweakable tweakable))
 
 (defun class-bindings (class &optional (mark-default-p t))
   (loop for slot in (closer-mop:class-direct-slots class)
