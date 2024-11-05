@@ -209,9 +209,10 @@
 
 (defmethod on-error ((sketch sketch) stage error)
   (declare (ignorable sketch))
-  (background (ecase stage
+  (background (case stage
                 (:setup (rgb 0.4 0.2 0.1))
-                (:draw (rgb 0.7 0 0))))
+                (:draw (rgb 0.7 0 0))
+                (t (rgb 0 0 0))))
   (with-font (make-error-font)
     (with-identity-matrix
       (text (format nil "Error in ~A~%---~%~a~%---~%Click for restarts." stage error) 20 20)))
@@ -262,13 +263,16 @@
       (gl:viewport 0 0 width height)
       (setf %viewport-changed nil))))
 
+(defun copying-pixels-p (sketch)
+  (and (sketch-copy-pixels sketch) (env-fbo *env*)))
+
 (defmethod kit.sdl2:render ((win sketch-window) &aux (sketch (%sketch win)))
   (maybe-change-viewport sketch)
   (with-sketch (sketch)
     (with-gl-draw
         (with-error-handling (sketch)
-          (when (and copy-pixels (env-fbo *env*))
-            (gl:bind-framebuffer :framebuffer (env-fbo *env*)))  
+          (when (copying-pixels-p sketch)
+            (gl:bind-framebuffer :framebuffer (env-fbo *env*)))
           (unless (sketch-copy-pixels sketch)
             (background (gray 0.4)))
           (when (or (env-red-screen *env*)
@@ -279,16 +283,17 @@
               (setup sketch)))
           (with-stage :draw
             (draw sketch))
-          (when (and copy-pixels (env-fbo *env*))
+          (when (copying-pixels-p sketch) 
             (gl:bind-framebuffer :framebuffer 0)
             (gl:clear-color 0.0 0.0 0.0 1.0)
             (gl:clear :color-buffer)
             (gl:bind-framebuffer :read-framebuffer (env-fbo *env*))
             (gl:bind-framebuffer :draw-framebuffer 0)
-            (%gl:blit-framebuffer 0 0 width height
-                                  0 0 width height
-                                  '(:color-buffer-bit)
-                                  :nearest)
+            (with-slots (width height) sketch
+              (%gl:blit-framebuffer 0 0 width height
+                                    0 0 width height
+                                    '(:color-buffer-bit)
+                                    :nearest))
             (gl:bind-framebuffer :framebuffer 0))))))
 
 ;;; Support for resizable windows
@@ -359,7 +364,7 @@
 
 (defun define-sketch-draw-method (name bindings body)
   `(defmethod draw ((*sketch* ,name) &key x y width height mode &allow-other-keys)
-     (declare (ignore x y width height mode))
+     (declare (ignorable x y width height mode))
      (with-accessors (,@(loop for b in bindings
                               collect `(,(binding-name b) ,(binding-accessor b))))
          *sketch*
@@ -390,7 +395,7 @@
           &key ,@(loop for b in bindings
                         collect (list (binding-name b) (binding-initform b)))
         &allow-other-keys)
-     (declare (ignore ,@(loop for b in bindings collect (binding-name b))))
+     (declare (ignorable ,@(loop for b in bindings collect (binding-name b))))
      (apply #'make-instance ',name args)))
 
 (defmacro defsketch (sketch-name binding-forms &body body)
