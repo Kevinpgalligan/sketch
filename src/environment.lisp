@@ -78,6 +78,32 @@
     (gl:clear :color-buffer :depth-buffer)
     (gl:flush)))
 
+(defun initialize-fbo (sketch)
+  (with-slots ((env %env) copy-pixels) sketch
+    (with-slots (fbo rbo) env
+      (when (and fbo (not copy-pixels))
+        (gl:delete-framebuffers (vector fbo))
+        (gl:delete-renderbuffers (vector rbo))
+        (setf fbo nil rbo nil))
+      (when (and (not fbo) copy-pixels)
+        (setf fbo (gl:gen-framebuffer)
+              rbo (gl:gen-renderbuffer))
+        (gl:bind-framebuffer :framebuffer fbo)
+        (gl:bind-renderbuffer :renderbuffer rbo)
+        (gl:renderbuffer-storage :renderbuffer
+                                 :rgba32f
+                                 (sketch-width sketch)
+                                 (sketch-height sketch))
+        (gl:framebuffer-renderbuffer :framebuffer :color-attachment0 :renderbuffer rbo)
+        (unless (= (cffi:foreign-enum-value '%gl:enum (gl:check-framebuffer-status :framebuffer))
+                   (cffi:foreign-enum-value '%gl:enum :framebuffer-complete))
+          (warn "Couldn't create FBO, COPY-PIXELS might not work.")
+          (gl:delete-framebuffers (vector fbo))
+          (gl:delete-renderbuffers (vector rbo))
+          (setf fbo nil rbo nil))
+        (gl:bind-framebuffer :framebuffer 0)
+        (gl:bind-renderbuffer :renderbuffer 0)))))
+
 (defmacro with-environment (env &body body)
   `(let ((*env* ,env))
      ,@body))

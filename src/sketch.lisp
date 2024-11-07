@@ -69,6 +69,7 @@
 
 (defmacro define-sketch-writer (slot &body body)
   `(defmethod (setf ,(alexandria:symbolicate 'sketch- slot)) :after (value (instance sketch))
+     (declare (ignorable win))
      (alexandria:when-let (win (sketch-%window instance))
        (let ((win (kit.sdl2:sdl-window win)))
          ,@body))))
@@ -93,35 +94,10 @@
    (if value sdl2-ffi:+true+ sdl2-ffi:+false+)))
 
 (define-sketch-writer y-axis
-  (declare (ignorable win))
   (initialize-view-matrix instance))
 
 (define-sketch-writer copy-pixels
-  (declare (ignore win))
-  (with-slots ((env %env)) instance
-    (with-slots (fbo rbo) env
-      (when (and fbo (not value))
-        (gl:delete-framebuffers (vector fbo))
-        (gl:delete-renderbuffers (vector rbo))
-        (setf fbo nil rbo nil))
-      (when (and (not fbo) value)
-        (setf fbo (gl:gen-framebuffer)
-              rbo (gl:gen-renderbuffer))
-        (gl:bind-framebuffer :framebuffer fbo)
-        (gl:bind-renderbuffer :renderbuffer rbo)
-        (gl:renderbuffer-storage :renderbuffer
-                                 :rgba32f
-                                 (sketch-width instance)
-                                 (sketch-height instance))
-        (gl:framebuffer-renderbuffer :framebuffer :color-attachment0 :renderbuffer rbo)
-        (unless (= (cffi:foreign-enum-value '%gl:enum (gl:check-framebuffer-status :framebuffer))
-                   (cffi:foreign-enum-value '%gl:enum :framebuffer-complete))
-          (warn "Couldn't create FBO, COPY-PIXELS might not work.")
-          (gl:delete-framebuffers (vector fbo))
-          (gl:delete-renderbuffers (vector rbo))
-          (setf fbo nil rbo nil))
-        (gl:bind-framebuffer :framebuffer 0)
-        (gl:bind-renderbuffer :renderbuffer 0)))))
+  (initialize-fbo instance))
 
 ;;; Generic functions
 
@@ -175,6 +151,7 @@
                        :fullscreen (sketch-fullscreen instance)
                        :resizable (sketch-resizable instance)
                        :sketch instance))
+  (initialize-fbo instance)
   (initialize-environment instance)
   (initialize-gl instance)
   ;; These will have been added in the call to PREPARE.
