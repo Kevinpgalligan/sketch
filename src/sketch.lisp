@@ -264,6 +264,7 @@
             (gl:bind-framebuffer :framebuffer 0)
             (gl:clear-color 0.0 0.0 0.0 1.0)
             (gl:clear :color-buffer)
+            (gl:blend-func :one :one-minus-src-alpha)
             (gl:bind-framebuffer :read-framebuffer (env-fbo *env*))
             (gl:bind-framebuffer :draw-framebuffer 0)
             (with-slots (width height) sketch
@@ -271,7 +272,8 @@
                                     0 0 width height
                                     '(:color-buffer-bit)
                                     :nearest))
-            (gl:bind-framebuffer :framebuffer 0))))))
+            (gl:bind-framebuffer :framebuffer 0)
+            (gl:blend-func-separate :src-alpha :one-minus-src-alpha :one :one-minus-src-alpha))))))
 
 ;;; Support for resizable windows
 
