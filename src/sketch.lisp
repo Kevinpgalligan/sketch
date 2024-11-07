@@ -71,6 +71,7 @@
   `(defmethod (setf ,(alexandria:symbolicate 'sketch- slot)) :after (value (instance sketch))
      (alexandria:when-let (win (sketch-%window instance))
        (let ((win (kit.sdl2:sdl-window win)))
+         (declare (ignorable win))
          ,@body))))
 
 (define-sketch-writer title
@@ -93,8 +94,10 @@
    (if value sdl2-ffi:+true+ sdl2-ffi:+false+)))
 
 (define-sketch-writer y-axis
-  (declare (ignorable win))
   (initialize-view-matrix instance))
+
+(define-sketch-writer copy-pixels
+  (initialize-fbo instance))
 
 ;;; Generic functions
 
@@ -148,6 +151,7 @@
                        :fullscreen (sketch-fullscreen instance)
                        :resizable (sketch-resizable instance)
                        :sketch instance))
+  (initialize-fbo instance)
   (initialize-environment instance)
   (initialize-gl instance)
   ;; These will have been added in the call to PREPARE.
@@ -182,9 +186,10 @@
 
 (defmethod on-error ((sketch sketch) stage error)
   (declare (ignorable sketch))
-  (background (ecase stage
+  (background (case stage
                 (:setup (rgb 0.4 0.2 0.1))
-                (:draw (rgb 0.7 0 0))))
+                (:draw (rgb 0.7 0 0))
+                (t (rgb 0 0 0))))
   (with-font (make-error-font)
     (with-identity-matrix
       (text (format nil "Error in ~A~%---~%~a~%---~%Click for restarts." stage error) 20 20)))
@@ -235,24 +240,38 @@
       (gl:viewport 0 0 width height)
       (setf %viewport-changed nil))))
 
+(defun copying-pixels-p (sketch)
+  (and (sketch-copy-pixels sketch) (env-fbo *env*)))
+
 (defmethod kit.sdl2:render ((win sketch-window) &aux (sketch (%sketch win)))
   (maybe-change-viewport sketch)
   (with-sketch (sketch)
     (with-gl-draw
-      (with-error-handling (sketch)
-        (unless (sketch-copy-pixels sketch)
-          (background (gray 0.4)))
-        (when (or (env-red-screen *env*)
-                  (not (sketch-%setup-called sketch)))
-          (setf (env-red-screen *env*) nil
-                (sketch-%setup-called sketch) t)
-          (with-stage :setup
-            (setup sketch)))
-        (with-stage :draw
-          (draw sketch))))))
-
-(defmethod kit.sdl2:render ((instance sketch))
-  (kit.sdl2:render (sketch-%window instance)))
+        (with-error-handling (sketch)
+          (when (copying-pixels-p sketch)
+            (gl:bind-framebuffer :framebuffer (env-fbo *env*)))
+          (unless (sketch-copy-pixels sketch)
+            (background (gray 0.4)))
+          (when (or (env-red-screen *env*)
+                    (not (sketch-%setup-called sketch)))
+            (setf (env-red-screen *env*) nil
+                  (sketch-%setup-called sketch) t)
+            (with-stage :setup
+              (setup sketch)))
+          (with-stage :draw
+            (draw sketch))
+          (when (copying-pixels-p sketch) 
+            (gl:bind-framebuffer :framebuffer 0)
+            (gl:clear-color 0.0 0.0 0.0 1.0)
+            (gl:clear :color-buffer)
+            (gl:bind-framebuffer :read-framebuffer (env-fbo *env*))
+            (gl:bind-framebuffer :draw-framebuffer 0)
+            (with-slots (width height) sketch
+              (%gl:blit-framebuffer 0 0 width height
+                                    0 0 width height
+                                    '(:color-buffer-bit)
+                                    :nearest))
+            (gl:bind-framebuffer :framebuffer 0))))))
 
 ;;; Support for resizable windows
 
@@ -287,7 +306,12 @@
 (defmethod close-window :before ((instance sketch-window))
   (with-environment (slot-value (%sketch instance) '%env)
     (loop for resource being the hash-values of (env-resources *env*)
-       do (free-resource resource))))
+       do (free-resource resource))
+    (when (env-fbo *env*)
+      (gl:delete-framebuffers (vector (env-fbo *env*)))
+      (gl:delete-renderbuffers (vector (env-rbo *env*)))
+      (setf (env-fbo *env*) nil
+            (env-rbo *env*) nil))))
 
 (defmethod close-window :after ((instance sketch))
   (when (and *build* (not (kit.sdl2:all-windows)))
@@ -317,7 +341,7 @@
 
 (defun define-sketch-draw-method (name bindings body)
   `(defmethod draw ((*sketch* ,name) &key x y width height mode &allow-other-keys)
-     (declare (ignore x y width height mode))
+     (declare (ignorable x y width height mode))
      (with-accessors (,@(loop for b in bindings
                               collect `(,(binding-name b) ,(binding-accessor b))))
          *sketch*
@@ -348,7 +372,7 @@
           &key ,@(loop for b in bindings
                         collect (list (binding-name b) (binding-initform b)))
         &allow-other-keys)
-     (declare (ignore ,@(loop for b in bindings collect (binding-name b))))
+     (declare (ignorable ,@(loop for b in bindings collect (binding-name b))))
      (apply #'make-instance ',name args)))
 
 (defmacro defsketch (sketch-name binding-forms &body body)
