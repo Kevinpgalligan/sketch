@@ -42,6 +42,8 @@
                      :accessor sketch-%post-init-hooks)
    (%post-draw-hooks :initform nil :initarg :post-draw-hooks
                      :accessor sketch-%post-draw-hooks)
+   (%copy-pixels-post-setup-hooks :initform nil :initarg :copy-pixels-post-setup-hooks
+                                  :accessor sketch-%copy-pixels-post-setup-hooks)
    (%close-hooks :initform nil :initarg :close-hooks
                  :accessor sketch-%close-hooks)
    (title :initform "Sketch" :accessor sketch-title :initarg :title)
@@ -55,6 +57,10 @@
    (restart-on-change :initform nil :accessor sketch-restart-on-change
                       :initarg :restart-on-change)
    (restart-on :initform :f1 :accessor sketch-restart-on :initarg :restart-on)))
+
+(defun call-hooks (sketch hooks-sym)
+  (loop for hook in (slot-value sketch hooks-sym)
+        do (funcall hook sketch)))
 
 (defclass sketch-window (kit.sdl2:gl-window)
   ((%sketch
@@ -126,8 +132,7 @@
 
 (defmethod draw :around ((*sketch* sketch) &key &allow-other-keys)
   (call-next-method)
-  (loop for hook in (sketch-%post-draw-hooks *sketch*)
-        do (funcall hook *sketch*)))
+  (call-hooks *sketch* '%post-draw-hooks))
 
 ;;; Initialization
 
@@ -170,8 +175,7 @@
     (loop for f across fs
           do (funcall f))
     (setf fs (make-array 0 :adjustable t :fill-pointer t)))
-  (loop for hook in (sketch-%post-init-hooks instance)
-        do (funcall hook instance)))
+  (call-hooks instance '%post-init-hooks))
 
 (defmethod update-instance-for-redefined-class :after
     ((instance sketch) added-slots discarded-slots property-list &rest initargs)
@@ -270,7 +274,9 @@
             (setf (env-red-screen *env*) nil
                   (sketch-%setup-called sketch) t)
             (with-stage :setup
-              (setup sketch)))
+              (setup sketch)
+              (when (sketch-copy-pixels sketch)
+                (call-hooks sketch '%copy-pixels-post-setup-hooks))))
           (with-stage :draw
             (draw sketch))
           (when (copying-pixels-p sketch) 
@@ -436,43 +442,72 @@
     (apply #'make-instance name args)))
 
 (defun record-sketch (name output-path
-                      &key args frames until (fps 30)
+                      &key args frames seconds
+                        close-on-finish (fps 30)
                       &allow-other-keys)
-  (let (buffer proc stream)
-    (flet ((post-init (sketch)
-             (setf buffer
-                   (static-vectors:make-static-vector
-                    (* 4 (sketch-width sketch) (sketch-height sketch))))
-             (setf proc
-                   (uiop:launch-program
-                    (list "ffmpeg"
-                          "-r" (format nil "~a" fps)
-                          "-f" "rawvideo"
-                          "-pix_fmt" "rgba"
-                          "-s:v" (format nil "~ax~a"
-                                         (sketch-width sketch)
-                                         (sketch-height sketch))
-                          "-i" "pipe:"
-                          output-path)
-                    :input :stream
-                    :external-format :latin1))
-             (setf stream (uiop:process-info-input proc)))
-           (post-draw (sketch)
-             (%gl:read-pixels 0 0 (sketch-width sketch) (sketch-height sketch)
-                              :rgba :unsigned-byte
-                              (static-vectors:static-vector-pointer buffer))
-             (write-sequence buffer stream))
-           (on-close (sketch)
-             (declare (ignore sketch))
-             (static-vectors:free-static-vector buffer)
-             (uiop:close-streams proc)
-             (uiop:wait-process proc)))
+  (multiple-value-bind (o eo status)
+      (uiop:run-program "ffmpeg -h")
+    (declare (ignore o eo))
+    (when (not (zerop status))
+      (error "ffmpeg doesn't seem to be available on this system.")))
+  (let (buffer
+        proc
+        stream
+        done
+        (n 0)
+        (start (get-universal-time)))
+    (labels ((post-init (sketch)
+               (setf buffer
+                     (static-vectors:make-static-vector
+                      (* 4 (sketch-width sketch) (sketch-height sketch))))
+               (setf proc
+                     (uiop:launch-program
+                      (list "ffmpeg"
+                            "-r" (format nil "~a" fps)
+                            "-f" "rawvideo"
+                            "-pix_fmt" "rgba"
+                            "-s:v" (format nil "~ax~a"
+                                           (sketch-width sketch)
+                                           (sketch-height sketch))
+                            "-i" "pipe:"
+                            output-path)
+                      :input :stream
+                      :external-format :latin1))
+               (setf stream (uiop:process-info-input proc)))
+
+             (end-recording (sketch)
+               (declare (ignore sketch))
+               (static-vectors:free-static-vector buffer)
+               (uiop:close-streams proc)
+               (uiop:wait-process proc))
+
+             (save-frame (sketch)
+               (when (not done)
+                 (%gl:read-pixels 0 0 (sketch-width sketch) (sketch-height sketch)
+                                  :rgba :unsigned-byte
+                                  (static-vectors:static-vector-pointer buffer))
+                 (write-sequence buffer stream)
+                 (incf n)))
+
+             (post-draw (sketch)
+               (when (not done)
+                 (save-frame sketch)
+                 (when (or (and frames (>= n frames))
+                           (and seconds (>= (- (get-universal-time) start) seconds)))
+                   (setf done t)
+                   (if close-on-finish
+                       ;; END-RECORDING will be called as part of a hook here, don't
+                       ;; need to call it ourselves.
+                       (kit.sdl2:close-window sketch)
+                       (end-recording sketch))))))
+
       (apply #'make-instance
              name
              (append args
                      (list :post-init-hooks (list #'post-init)
                            :post-draw-hooks (list #'post-draw)
-                           :close-hooks (list #'on-close)))))))
+                           :copy-pixels-post-setup-hooks (list #'save-frame)
+                           :close-hooks (list #'end-recording)))))))
 
 ;;; Control flow
 
@@ -539,8 +574,7 @@
   (with-slots ((window %window)) instance
     (setf (window-%closing window) t)
     (kit.sdl2:close-window window))
-  (loop for hook in (sketch-%close-hooks instance)
-        do (funcall hook instance)))
+  (call-hooks instance '%close-hooks))
 
 (defmethod kit.sdl2:close-window :around ((instance sketch-window))
   (if (window-%closing instance)

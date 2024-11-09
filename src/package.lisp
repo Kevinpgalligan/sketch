@@ -16,6 +16,7 @@
 
            :defsketch
            :run-sketch
+           :record-sketch
 
            :sketch-slot-value
            :sketch-title
