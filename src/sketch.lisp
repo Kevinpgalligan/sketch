@@ -38,6 +38,12 @@
    (%noise-map :initform (make-hash-table) :accessor sketch-%noise-map)
    (%noise-lod :initform 4 :accessor sketch-%noise-lod)
    (%noise-falloff :initform 0.5 :accessor sketch-%noise-falloff)
+   (%post-init-hooks :initform nil :initarg :post-init-hooks
+                     :accessor sketch-%post-init-hooks)
+   (%post-draw-hooks :initform nil :initarg :post-draw-hooks
+                     :accessor sketch-%post-draw-hooks)
+   (%close-hooks :initform nil :initarg :close-hooks
+                 :accessor sketch-%close-hooks)
    (title :initform "Sketch" :accessor sketch-title :initarg :title)
    (width :initform *default-width* :accessor sketch-width :initarg :width)
    (height :initform *default-height* :accessor sketch-height :initarg :height)
@@ -118,6 +124,11 @@
     (declare (ignore x y width height mode))
     ()))
 
+(defmethod draw :around ((*sketch* sketch) &key &allow-other-keys)
+  (call-next-method)
+  (loop for hook in (sketch-%post-draw-hooks *sketch*)
+        do (funcall hook *sketch*)))
+
 ;;; Initialization
 
 (defparameter *initialized* nil)
@@ -158,7 +169,9 @@
   (with-slots ((fs %delayed-init-funs)) instance
     (loop for f across fs
           do (funcall f))
-    (setf fs (make-array 0 :adjustable t :fill-pointer t))))
+    (setf fs (make-array 0 :adjustable t :fill-pointer t)))
+  (loop for hook in (sketch-%post-init-hooks instance)
+        do (funcall hook instance)))
 
 (defmethod update-instance-for-redefined-class :after
     ((instance sketch) added-slots discarded-slots property-list &rest initargs)
@@ -422,6 +435,45 @@
       (error (format nil "Couldn't find a sketch called ~a" name)))
     (apply #'make-instance name args)))
 
+(defun record-sketch (name output-path
+                      &key args frames until (fps 30)
+                      &allow-other-keys)
+  (let (buffer proc stream)
+    (flet ((post-init (sketch)
+             (setf buffer
+                   (static-vectors:make-static-vector
+                    (* 4 (sketch-width sketch) (sketch-height sketch))))
+             (setf proc
+                   (uiop:launch-program
+                    (list "ffmpeg"
+                          "-r" (format nil "~a" fps)
+                          "-f" "rawvideo"
+                          "-pix_fmt" "rgba"
+                          "-s:v" (format nil "~ax~a"
+                                         (sketch-width sketch)
+                                         (sketch-height sketch))
+                          "-i" "pipe:"
+                          output-path)
+                    :input :stream
+                    :external-format :latin1))
+             (setf stream (uiop:process-info-input proc)))
+           (post-draw (sketch)
+             (%gl:read-pixels 0 0 (sketch-width sketch) (sketch-height sketch)
+                              :rgba :unsigned-byte
+                              (static-vectors:static-vector-pointer buffer))
+             (write-sequence buffer stream))
+           (on-close (sketch)
+             (declare (ignore sketch))
+             (static-vectors:free-static-vector buffer)
+             (uiop:close-streams proc)
+             (uiop:wait-process proc)))
+      (apply #'make-instance
+             name
+             (append args
+                     (list :post-init-hooks (list #'post-init)
+                           :post-draw-hooks (list #'post-draw)
+                           :close-hooks (list #'on-close)))))))
+
 ;;; Control flow
 
 (defun stop-loop ()
@@ -486,7 +538,9 @@
 (defmethod kit.sdl2:close-window ((instance sketch))
   (with-slots ((window %window)) instance
     (setf (window-%closing window) t)
-    (kit.sdl2:close-window window)))
+    (kit.sdl2:close-window window))
+  (loop for hook in (sketch-%close-hooks instance)
+        do (funcall hook instance)))
 
 (defmethod kit.sdl2:close-window :around ((instance sketch-window))
   (if (window-%closing instance)
