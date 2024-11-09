@@ -443,8 +443,10 @@
 
 (defun record-sketch (name output-path
                       &key args frames seconds
-                        close-on-finish (fps 30)
+                        close-on-finish (fps 40)
                       &allow-other-keys)
+  (when (uiop:file-exists-p output-path)
+    (error (format nil "File '~a' already exists!" output-path)))
   (multiple-value-bind (o eo status)
       (uiop:run-program "ffmpeg -h")
     (declare (ignore o eo))
@@ -470,9 +472,12 @@
                                            (sketch-width sketch)
                                            (sketch-height sketch))
                             "-i" "pipe:"
+                            "-vf" "vflip"
                             output-path)
                       :input :stream
-                      :external-format :latin1))
+                      :external-format :latin1
+                      :output :interactive
+                      :error-output :output))
                (setf stream (uiop:process-info-input proc)))
 
              (end-recording (sketch)
