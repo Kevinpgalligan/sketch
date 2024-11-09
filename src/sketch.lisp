@@ -443,7 +443,7 @@
 
 (defun record-sketch (name output-path
                       &key args frames seconds
-                        close-on-finish (fps 40)
+                        close-on-finish (fps 60)
                       &allow-other-keys)
   (when (uiop:file-exists-p output-path)
     (error (format nil "File '~a' already exists!" output-path)))
