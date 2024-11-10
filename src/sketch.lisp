@@ -54,7 +54,7 @@
    (copy-pixels :initform nil :accessor sketch-copy-pixels :initarg :copy-pixels)
    (y-axis :initform :down :accessor sketch-y-axis :initarg :y-axis)
    (close-on :initform :escape :accessor sketch-close-on :initarg :close-on)
-   (restart-on-change :initform nil :accessor sketch-restart-on-change
+   (restart-on-change :initform t :accessor sketch-restart-on-change
                       :initarg :restart-on-change)
    (restart-on :initform :f1 :accessor sketch-restart-on :initarg :restart-on)))
 
@@ -167,7 +167,6 @@
                        :fullscreen (sketch-fullscreen instance)
                        :resizable (sketch-resizable instance)
                        :sketch instance))
-  (initialize-fbo instance)
   (initialize-environment instance)
   (initialize-gl instance)
   ;; These will have been added in the call to PREPARE.
