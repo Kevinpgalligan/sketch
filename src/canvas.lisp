@@ -27,53 +27,61 @@
          (gl:bind-framebuffer :framebuffer ,old-fbo)))))
 
 (defmacro with-drawing-to-canvas ((canvas) &body body)
-  (alexandria:with-gensyms (fbo rbo)
-    `(with-slots ((,fbo %fbo)
-                  (,rbo %rbo))
-         ,canvas
-       (with-fbo
-         ;; Create a framebuffer for drawing to if it doesn't
-         ;; exist already.
-         (when (null ,fbo)
-           (setf ,fbo (gl:gen-framebuffer)
-                 ,rbo (gl:gen-renderbuffer))
-           (gl:bind-framebuffer :framebuffer ,fbo)
-           (gl:bind-renderbuffer :renderbuffer ,rbo)
-           (gl:renderbuffer-storage :renderbuffer
-                                    :rgba32f
-                                    (canvas-width ,canvas)
-                                    (canvas-height ,canvas))
-           (gl:framebuffer-renderbuffer :framebuffer
-                                        :color-attachment0
-                                        :renderbuffer
-                                        ,rbo)
-           (unless (= (cffi:foreign-enum-value '%gl:enum (gl:check-framebuffer-status :framebuffer))
-                      (cffi:foreign-enum-value '%gl:enum :framebuffer-complete))
-             (warn "Failed to create FBO for drawing to canvas.")
-             (gl:delete-framebuffers (vector ,fbo))
-             (gl:delete-renderbuffers (vector ,rbo))
-             (setf ,fbo nil ,rbo nil))
-           (gl:bind-framebuffer :framebuffer 0)
-           (gl:bind-renderbuffer :renderbuffer 0))
-         ;; If we were successful, bind the framebuffer so that
-         ;; all the drawing targets it.
-         (when ,fbo
-           (gl:bind-framebuffer :framebuffer ,fbo)
-           ;; Clear buffer with an alpha of 0 to ensure that, if we don't draw
-           ;; to a certain pixel, then it won't overwrite the canvas.
-           (gl:clear-color 0.0 0.0 0.0 0.0)
-           (gl:clear :color-buffer))
-         ;; Run the caller's drawing code.
-         ,@body
-         ;; Now read back the data from the FBO, copying it over to
-         ;; the canvas.
-         (when ,fbo
-           (gl:bind-framebuffer :framebuffer ,fbo)
-           (%gl:read-pixels 0 0
-                            (canvas-width ,canvas) (canvas-height ,canvas)
-                            :bgra
-                            :unsigned-byte
-                            (%canvas-vector-pointer ,canvas)))))))
+  (alexandria:with-gensyms (fbo rbo y-axis old-y-axis)
+    (alexandria:once-only (canvas)
+      `(with-slots ((,fbo %fbo)
+                    (,rbo %rbo))
+           ,canvas
+         (with-fbo
+           ;; Create a framebuffer for drawing to if it doesn't
+           ;; already exist.
+           (when (null ,fbo)
+             (setf ,fbo (gl:gen-framebuffer)
+                   ,rbo (gl:gen-renderbuffer))
+             (gl:bind-framebuffer :framebuffer ,fbo)
+             (gl:bind-renderbuffer :renderbuffer ,rbo)
+             (gl:renderbuffer-storage :renderbuffer
+                                      :rgba32f
+                                      (canvas-width ,canvas)
+                                      (canvas-height ,canvas))
+             (gl:framebuffer-renderbuffer :framebuffer
+                                          :color-attachment0
+                                          :renderbuffer
+                                          ,rbo)
+             (unless (= (cffi:foreign-enum-value '%gl:enum (gl:check-framebuffer-status :framebuffer))
+                        (cffi:foreign-enum-value '%gl:enum :framebuffer-complete))
+               (warn "Failed to create FBO for drawing to canvas.")
+               (gl:delete-framebuffers (vector ,fbo))
+               (gl:delete-renderbuffers (vector ,rbo))
+               (setf ,fbo nil ,rbo nil))
+             (gl:bind-framebuffer :framebuffer 0)
+             (gl:bind-renderbuffer :renderbuffer 0))
+           (let* ((,old-y-axis (sketch-y-axis *sketch*))
+                  (,y-axis (if (eq ,old-y-axis :up) :down :up)))
+             ;; If we were successful, bind the framebuffer so that
+             ;; all the drawing operations target it.
+             (when ,fbo
+               (gl:bind-framebuffer :framebuffer ,fbo)
+               ;; Draw upside-down because the output from read-pixels
+               ;; is upside-down.
+               (setf (sketch-y-axis *sketch*) ,y-axis)
+               (maybe-change-viewport *sketch*)
+               ;; First draw the canvas into the framebuffer so
+               ;; that the drawing operations layer on top of it.
+               (draw ,canvas))
+             ;; Run the caller's drawing code.
+             ,@body
+             ;; Now read back the data from the FBO, copying it over to
+             ;; the canvas.
+             (when ,fbo
+               (gl:bind-framebuffer :framebuffer ,fbo)
+               (%gl:read-pixels 0 0
+                                (canvas-width ,canvas) (canvas-height ,canvas)
+                                :bgra
+                                :unsigned-byte
+                                (%canvas-vector-pointer ,canvas))
+               (setf (sketch-y-axis *sketch*) ,old-y-axis)
+               (maybe-change-viewport *sketch*))))))))
 
 (defun make-canvas (width height)
   (let ((canvas (make-instance 'canvas :width width :height height)))

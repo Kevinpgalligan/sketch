@@ -134,6 +134,9 @@
   (call-next-method)
   (call-hooks *sketch* '%post-draw-hooks))
 
+(defmethod setup :around ((*sketch* sketch) &key &allow-other-keys)
+  (call-next-method))
+
 ;;; Initialization
 
 (defparameter *initialized* nil)
