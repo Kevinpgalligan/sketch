@@ -194,6 +194,7 @@
            :canvas-unlock
            :canvas-width
            :canvas-height
+           :with-drawing-to-canvas
 
            ;; Controllers
            :on-click
