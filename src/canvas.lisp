@@ -38,9 +38,9 @@
 (defun canvas-paint-rgba255 (canvas r g b a x y)
   (let ((ptr (%canvas-vector-pointer canvas))
         (pos (+ (* x 4) (* y 4 (canvas-width canvas)))))
-    (setf (cffi:mem-aref ptr :uint8 pos) r
+    (setf (cffi:mem-aref ptr :uint8 pos) b
           (cffi:mem-aref ptr :uint8 (+ pos 1)) g
-          (cffi:mem-aref ptr :uint8 (+ pos 2)) b
+          (cffi:mem-aref ptr :uint8 (+ pos 2)) r
           (cffi:mem-aref ptr :uint8 (+ pos 3)) a)))
 
 (defun canvas-paint-gray255 (canvas amount x y)
