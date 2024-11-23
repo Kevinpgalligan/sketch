@@ -83,6 +83,23 @@
                (setf (sketch-y-axis *sketch*) ,old-y-axis)
                (maybe-change-viewport *sketch*))))))))
 
+(defun canvas-get-pixel (canvas x y)
+  "Fetches the pixel at coordinates (X, Y) from the canvas.
+Returns 4 values: R, G, B and A, which are integers in the range 0-255."
+  ;; Possible improvements:
+  ;; 1. Deduplicate code, see CANVAS-PAINT and CANVAS-PAINT-RGBA255.
+  ;; 2. If this is slow, could try switching to cffi:make-shareable-vector for
+  ;;    storage. I think we could then access it like a normal array. As far
+  ;;    as I remember, the CFFI interface is quite inefficient and does unnecessary
+  ;;    cons-ing.
+  (let ((base-index (* 4 (+ x (* (canvas-width canvas) y))))
+        (ptr (%canvas-vector-pointer canvas)))
+    (values
+     (cffi:mem-aref ptr :uint8 (+ base-index 2))
+     (cffi:mem-aref ptr :uint8 (+ base-index 1))
+     (cffi:mem-aref ptr :uint8 base-index)
+     (cffi:mem-aref ptr :uint8 (+ base-index 3)))))
+
 (defun make-canvas (width height)
   (let ((canvas (make-instance 'canvas :width width :height height)))
     (canvas-reset canvas)
@@ -102,7 +119,7 @@
     (dotimes (i 4)
       (setf (cffi:mem-aref ptr :uint8 (+ pos i)) (elt vec i)))))
 
-(defun canvas-paint-rgba255 (canvas r g b a x y)
+(defun canvas-paint-rgba255 (canvas x y r g b a)
   (let ((ptr (%canvas-vector-pointer canvas))
         (pos (+ (* x 4) (* y 4 (canvas-width canvas)))))
     (setf (cffi:mem-aref ptr :uint8 pos) b
@@ -110,8 +127,8 @@
           (cffi:mem-aref ptr :uint8 (+ pos 2)) r
           (cffi:mem-aref ptr :uint8 (+ pos 3)) a)))
 
-(defun canvas-paint-gray255 (canvas amount x y)
-  (canvas-paint-rgba255 canvas amount amount amount 255 x y))
+(defun canvas-paint-gray255 (canvas x y amount)
+  (canvas-paint-rgba255 canvas x y amount amount amount 255))
 
 (defmethod canvas-image ((canvas canvas)
                          &key (min-filter :linear)
