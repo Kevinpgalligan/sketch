@@ -370,22 +370,28 @@
 
 (defun define-sketch-prepare-method (name bindings)
   `(defmethod prepare ((*sketch* ,name)
-                       &key ,@(loop for b in bindings
-                                    collect `((,(binding-initarg b) ,(binding-name b))
-                                              ,(if (binding-defaultp b)
-                                                   `(,(binding-accessor b) *sketch*)
-                                                   (binding-initform b))))
+                       &key ,@(make-all-slots-keyword-list bindings)
                        &allow-other-keys)
      (setf ,@(loop for b in bindings
                    collect `(,(binding-accessor b) *sketch*)
                    collect (binding-name b)))))
 
 (defun define-sketch-set-tweakable-slots (name bindings)
-  `(defmethod set-tweakable-slots ((*sketch* ,name) &key &allow-other-keys)
+  `(defmethod set-tweakable-slots ((*sketch* ,name)
+                                   &key ,@(make-all-slots-keyword-list bindings)
+                                   &allow-other-keys)
+     (declare (ignorable ,@(mapcar #'binding-name bindings)))
      (setf ,@(loop for b in bindings
                    when (binding-tweakable b)
                      collect `(,(binding-accessor b) *sketch*)
                      and collect (binding-initform b)))))
+
+(defun make-all-slots-keyword-list (bindings)
+  (loop for b in bindings
+        collect `((,(binding-initarg b) ,(binding-name b))
+                  ,(if (binding-defaultp b)
+                       `(,(binding-accessor b) *sketch*)
+                       (binding-initform b)))))
 
 (defun define-sketch-run-function (name bindings)
   `(defun ,(alexandria:symbolicate 'run- name)
