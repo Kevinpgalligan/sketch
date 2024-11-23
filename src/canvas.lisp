@@ -115,12 +115,20 @@ Returns 4 values: R, G, B and A, which are integers in the range 0-255."
       (setf (aref (%canvas-vector canvas) (+ pos i)) (elt vec i)))))
 
 (defun canvas-paint-rgba255 (canvas x y r g b a)
-  (with-slots (%vector) canvas
-    (let ((pos (+ (* x 4) (* y 4 (canvas-width canvas)))))
-      (setf (aref %vector pos) b
-            (aref %vector (+ pos 1)) g
-            (aref %vector (+ pos 2)) r
-            (aref %vector (+ pos 3)) a))))
+  (declare (optimize (speed 3) (debug 0) (safety 0))
+           ((unsigned-byte 8) r g b a)
+           (fixnum x y)
+           (canvas canvas))
+  (let ((vec (%canvas-vector canvas))
+        (width (canvas-width canvas)))
+    (declare ((simple-array (unsigned-byte 8)) vec)
+             (fixnum width))
+    (let ((pos (+ (the fixnum (* 4 x))
+                  (the fixnum (* 4 (the fixnum (* y width)))))))
+      (setf (aref vec pos) b
+            (aref vec (+ pos 1)) g
+            (aref vec (+ pos 2)) r
+            (aref vec (+ pos 3)) a))))
 
 (defun canvas-paint-gray255 (canvas x y amount)
   (canvas-paint-rgba255 canvas x y amount amount amount 255))
