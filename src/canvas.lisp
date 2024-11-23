@@ -14,37 +14,150 @@
    (height :initarg :height :reader canvas-height)
    (%image :initform nil :accessor %canvas-image)
    (%vector :initform nil :accessor %canvas-vector)
-   (%locked :initform nil :accessor %canvas-locked)))
+   (%locked :initform nil :accessor %canvas-locked)
+   (%fbo :initform nil :accessor %canvas-fbo)
+   (%rbo :initform nil :accessor %canvas-rbo)))
+
+(defmacro with-fbo (&body body)
+  (alexandria:with-gensyms (old-fbo)
+    `(let ((,old-fbo (gl:get-integer :framebuffer-binding)))
+       (unwind-protect
+            (progn
+              ,@body)
+         (gl:bind-framebuffer :framebuffer ,old-fbo)))))
+
+(defmacro with-drawing-to-canvas ((canvas) &body body)
+  (alexandria:with-gensyms (fbo rbo y-axis old-y-axis ptr)
+    (alexandria:once-only (canvas)
+      `(with-slots ((,fbo %fbo)
+                    (,rbo %rbo))
+           ,canvas
+         (with-fbo
+           ;; Create a framebuffer for drawing to if it doesn't
+           ;; already exist.
+           (when (null ,fbo)
+             (setf ,fbo (gl:gen-framebuffer)
+                   ,rbo (gl:gen-renderbuffer))
+             (gl:bind-framebuffer :framebuffer ,fbo)
+             (gl:bind-renderbuffer :renderbuffer ,rbo)
+             (gl:renderbuffer-storage :renderbuffer
+                                      :rgba32f
+                                      (canvas-width ,canvas)
+                                      (canvas-height ,canvas))
+             (gl:framebuffer-renderbuffer :framebuffer
+                                          :color-attachment0
+                                          :renderbuffer
+                                          ,rbo)
+             (unless (= (cffi:foreign-enum-value '%gl:enum (gl:check-framebuffer-status :framebuffer))
+                        (cffi:foreign-enum-value '%gl:enum :framebuffer-complete))
+               (warn "Failed to create FBO for drawing to canvas.")
+               (gl:delete-framebuffers (vector ,fbo))
+               (gl:delete-renderbuffers (vector ,rbo))
+               (setf ,fbo nil ,rbo nil))
+             (gl:bind-framebuffer :framebuffer 0)
+             (gl:bind-renderbuffer :renderbuffer 0))
+           (let* ((,old-y-axis (sketch-y-axis *sketch*))
+                  (,y-axis (if (eq ,old-y-axis :up) :down :up)))
+             ;; If we were successful, bind the framebuffer so that
+             ;; all the drawing operations target it.
+             (when ,fbo
+               (gl:bind-framebuffer :framebuffer ,fbo)
+               ;; Draw upside-down because the output from read-pixels
+               ;; is upside-down.
+               (setf (sketch-y-axis *sketch*) ,y-axis)
+               (maybe-change-viewport *sketch*)
+               ;; First draw the canvas into the framebuffer so
+               ;; that the drawing operations layer on top of it.
+               (draw ,canvas))
+             ;; Run the caller's drawing code.
+             ,@body
+             ;; Now read back the data from the FBO, copying it over to
+             ;; the canvas.
+             (when ,fbo
+               (gl:bind-framebuffer :framebuffer ,fbo)
+               (%with-canvas-ptr (,ptr ,canvas)
+                 (%gl:read-pixels 0 0
+                                  (canvas-width ,canvas) (canvas-height ,canvas)
+                                  :bgra
+                                  :unsigned-byte
+                                  ,ptr))
+               (setf (sketch-y-axis *sketch*) ,old-y-axis)
+               (maybe-change-viewport *sketch*))))))))
+
+(defun canvas-get-pixel (canvas x y)
+  "Fetches the pixel at coordinates (X, Y) from the canvas.
+Returns 4 values: R, G, B and A, which are integers in the range 0-255."
+  (let ((vec (%canvas-vector canvas))
+        (base-index (* 4 (+ x (* (canvas-width canvas) y)))))
+    (values
+     (aref vec (+ base-index 2))
+     (aref vec (+ base-index 1))
+     (aref vec base-index)
+     (aref vec (+ base-index 3)))))
 
 (defun make-canvas (width height)
   (let ((canvas (make-instance 'canvas :width width :height height)))
     (canvas-reset canvas)
     canvas))
 
-(defmethod %canvas-vector-pointer ((canvas canvas))
-  (static-vectors:static-vector-pointer (%canvas-vector canvas)))
+(defmacro %with-canvas-ptr ((ptr-var canvas) &body body)
+  `(cffi:with-pointer-to-vector-data (,ptr-var (%canvas-vector ,canvas))
+     ,@body))
+
+(cffi:defcfun "memcpy" :void
+  (dest :pointer)
+  (src :pointer)
+  (n :size))
+
+(defun make-canvas-from-image (filepath &key x y w h)
+  "Must provide all of X, Y, W and H to crop the image."
+  (let ((surface
+          (cut-surface (sdl2-image:load-image filepath) x y w h)))
+    (unless (eq (sdl2:surface-format-format surface) sdl2:+pixelformat-bgra32+)
+      ;; We store canvas data in BGRA format, for some reason. Gotta convert.
+      (let ((old-surface surface))
+        (setf surface
+              (sdl2:convert-surface-format old-surface sdl2:+pixelformat-bgra32+))
+        (sdl2:free-surface old-surface)))
+    (let ((canvas (make-canvas (sdl2:surface-width surface)
+                               (sdl2:surface-height surface))))
+      (%with-canvas-ptr (ptr canvas)
+        (memcpy ptr
+                (sdl2:surface-pixels surface)
+                (* 4
+                   (canvas-width canvas)
+                   (canvas-height canvas)))
+        (sdl2:free-surface surface))
+      canvas)))
 
 (defmethod canvas-reset ((canvas canvas))
   (setf (%canvas-vector canvas)
-        (static-vectors:make-static-vector (* (canvas-width canvas) (canvas-height canvas) 4) :initial-element 0)))
+        (cffi:make-shareable-byte-vector (* (canvas-width canvas) (canvas-height canvas) 4))))
 
 (defmethod canvas-paint ((canvas canvas) (color color) x y)
-  (let ((ptr (%canvas-vector-pointer canvas))
-        (pos (+ (* x 4) (* y 4 (canvas-width canvas))))
+  (let ((pos (+ (* x 4) (* y 4 (canvas-width canvas))))
         (vec (color-bgra-255 color)))
     (dotimes (i 4)
-      (setf (cffi:mem-aref ptr :uint8 (+ pos i)) (elt vec i)))))
+      (setf (aref (%canvas-vector canvas) (+ pos i)) (elt vec i)))))
 
-(defun canvas-paint-rgba255 (canvas r g b a x y)
-  (let ((ptr (%canvas-vector-pointer canvas))
-        (pos (+ (* x 4) (* y 4 (canvas-width canvas)))))
-    (setf (cffi:mem-aref ptr :uint8 pos) b
-          (cffi:mem-aref ptr :uint8 (+ pos 1)) g
-          (cffi:mem-aref ptr :uint8 (+ pos 2)) r
-          (cffi:mem-aref ptr :uint8 (+ pos 3)) a)))
+(defun canvas-paint-rgba255 (canvas x y r g b a)
+  (declare (optimize (speed 3) (debug 0) (safety 0))
+           ((unsigned-byte 8) r g b a)
+           (fixnum x y)
+           (canvas canvas))
+  (let ((vec (%canvas-vector canvas))
+        (width (canvas-width canvas)))
+    (declare ((simple-array (unsigned-byte 8)) vec)
+             (fixnum width))
+    (let ((pos (+ (the fixnum (* 4 x))
+                  (the fixnum (* 4 (the fixnum (* y width)))))))
+      (setf (aref vec pos) b
+            (aref vec (+ pos 1)) g
+            (aref vec (+ pos 2)) r
+            (aref vec (+ pos 3)) a))))
 
-(defun canvas-paint-gray255 (canvas amount x y)
-  (canvas-paint-rgba255 canvas amount amount amount 255 x y))
+(defun canvas-paint-gray255 (canvas x y amount)
+  (canvas-paint-rgba255 canvas x y amount amount amount 255))
 
 (defmethod canvas-image ((canvas canvas)
                          &key (min-filter :linear)
@@ -52,16 +165,17 @@
                          &allow-other-keys)
   (if (%canvas-locked canvas)
       (%canvas-image canvas)
-      (make-image-from-surface
-       (sdl2:create-rgb-surface-with-format-from
-        (%canvas-vector-pointer canvas)
-        (canvas-width canvas)
-        (canvas-height canvas)
-        32
-        (* 4 (canvas-width canvas))
-        :format sdl2:+pixelformat-argb8888+)
-       :min-filter min-filter
-       :mag-filter mag-filter)))
+      (%with-canvas-ptr (ptr canvas)
+        (make-image-from-surface
+         (sdl2:create-rgb-surface-with-format-from
+          ptr
+          (canvas-width canvas)
+          (canvas-height canvas)
+          32
+          (* 4 (canvas-width canvas))
+          :format sdl2:+pixelformat-argb8888+)
+         :min-filter min-filter
+         :mag-filter mag-filter))))
 
 (defmethod canvas-lock ((canvas canvas)
                         &key (min-filter :linear)
