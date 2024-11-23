@@ -27,7 +27,7 @@
          (gl:bind-framebuffer :framebuffer ,old-fbo)))))
 
 (defmacro with-drawing-to-canvas ((canvas) &body body)
-  (alexandria:with-gensyms (fbo rbo y-axis old-y-axis)
+  (alexandria:with-gensyms (fbo rbo y-axis old-y-axis ptr)
     (alexandria:once-only (canvas)
       `(with-slots ((,fbo %fbo)
                     (,rbo %rbo))
@@ -75,57 +75,52 @@
              ;; the canvas.
              (when ,fbo
                (gl:bind-framebuffer :framebuffer ,fbo)
-               (%gl:read-pixels 0 0
-                                (canvas-width ,canvas) (canvas-height ,canvas)
-                                :bgra
-                                :unsigned-byte
-                                (%canvas-vector-pointer ,canvas))
+               (%with-canvas-ptr (,ptr ,canvas)
+                 (%gl:read-pixels 0 0
+                                  (canvas-width ,canvas) (canvas-height ,canvas)
+                                  :bgra
+                                  :unsigned-byte
+                                  ,ptr))
                (setf (sketch-y-axis *sketch*) ,old-y-axis)
                (maybe-change-viewport *sketch*))))))))
 
 (defun canvas-get-pixel (canvas x y)
   "Fetches the pixel at coordinates (X, Y) from the canvas.
 Returns 4 values: R, G, B and A, which are integers in the range 0-255."
-  ;; Possible improvements:
-  ;; 1. Deduplicate code, see CANVAS-PAINT and CANVAS-PAINT-RGBA255.
-  ;; 2. If this is slow, could try switching to cffi:make-shareable-vector for
-  ;;    storage. I think we could then access it like a normal array. As far
-  ;;    as I remember, the CFFI interface is quite inefficient and does unnecessary
-  ;;    cons-ing.
-  (let ((base-index (* 4 (+ x (* (canvas-width canvas) y))))
-        (ptr (%canvas-vector-pointer canvas)))
+  (let ((vec (%canvas-vector canvas))
+        (base-index (* 4 (+ x (* (canvas-width canvas) y)))))
     (values
-     (cffi:mem-aref ptr :uint8 (+ base-index 2))
-     (cffi:mem-aref ptr :uint8 (+ base-index 1))
-     (cffi:mem-aref ptr :uint8 base-index)
-     (cffi:mem-aref ptr :uint8 (+ base-index 3)))))
+     (aref vec (+ base-index 2))
+     (aref vec (+ base-index 1))
+     (aref vec base-index)
+     (aref vec (+ base-index 3)))))
 
 (defun make-canvas (width height)
   (let ((canvas (make-instance 'canvas :width width :height height)))
     (canvas-reset canvas)
     canvas))
 
-(defmethod %canvas-vector-pointer ((canvas canvas))
-  (static-vectors:static-vector-pointer (%canvas-vector canvas)))
+(defmacro %with-canvas-ptr ((ptr-var canvas) &body body)
+  `(cffi:with-pointer-to-vector-data (,ptr-var (%canvas-vector ,canvas))
+     ,@body))
 
 (defmethod canvas-reset ((canvas canvas))
   (setf (%canvas-vector canvas)
-        (static-vectors:make-static-vector (* (canvas-width canvas) (canvas-height canvas) 4) :initial-element 0)))
+        (cffi:make-shareable-byte-vector (* (canvas-width canvas) (canvas-height canvas) 4))))
 
 (defmethod canvas-paint ((canvas canvas) (color color) x y)
-  (let ((ptr (%canvas-vector-pointer canvas))
-        (pos (+ (* x 4) (* y 4 (canvas-width canvas))))
+  (let ((pos (+ (* x 4) (* y 4 (canvas-width canvas))))
         (vec (color-bgra-255 color)))
     (dotimes (i 4)
-      (setf (cffi:mem-aref ptr :uint8 (+ pos i)) (elt vec i)))))
+      (setf (aref (%canvas-vector canvas) (+ pos i)) (elt vec i)))))
 
 (defun canvas-paint-rgba255 (canvas x y r g b a)
-  (let ((ptr (%canvas-vector-pointer canvas))
-        (pos (+ (* x 4) (* y 4 (canvas-width canvas)))))
-    (setf (cffi:mem-aref ptr :uint8 pos) b
-          (cffi:mem-aref ptr :uint8 (+ pos 1)) g
-          (cffi:mem-aref ptr :uint8 (+ pos 2)) r
-          (cffi:mem-aref ptr :uint8 (+ pos 3)) a)))
+  (with-slots (%vector) canvas
+    (let ((pos (+ (* x 4) (* y 4 (canvas-width canvas)))))
+      (setf (aref %vector pos) b
+            (aref %vector (+ pos 1)) g
+            (aref %vector (+ pos 2)) r
+            (aref %vector (+ pos 3)) a))))
 
 (defun canvas-paint-gray255 (canvas x y amount)
   (canvas-paint-rgba255 canvas x y amount amount amount 255))
@@ -136,16 +131,17 @@ Returns 4 values: R, G, B and A, which are integers in the range 0-255."
                          &allow-other-keys)
   (if (%canvas-locked canvas)
       (%canvas-image canvas)
-      (make-image-from-surface
-       (sdl2:create-rgb-surface-with-format-from
-        (%canvas-vector-pointer canvas)
-        (canvas-width canvas)
-        (canvas-height canvas)
-        32
-        (* 4 (canvas-width canvas))
-        :format sdl2:+pixelformat-argb8888+)
-       :min-filter min-filter
-       :mag-filter mag-filter)))
+      (%with-canvas-ptr (ptr canvas)
+        (make-image-from-surface
+         (sdl2:create-rgb-surface-with-format-from
+          ptr
+          (canvas-width canvas)
+          (canvas-height canvas)
+          32
+          (* 4 (canvas-width canvas))
+          :format sdl2:+pixelformat-argb8888+)
+         :min-filter min-filter
+         :mag-filter mag-filter))))
 
 (defmethod canvas-lock ((canvas canvas)
                         &key (min-filter :linear)
