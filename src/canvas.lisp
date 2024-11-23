@@ -104,6 +104,32 @@ Returns 4 values: R, G, B and A, which are integers in the range 0-255."
   `(cffi:with-pointer-to-vector-data (,ptr-var (%canvas-vector ,canvas))
      ,@body))
 
+(cffi:defcfun "memcpy" :void
+  (dest :pointer)
+  (src :pointer)
+  (n :size))
+
+(defun make-canvas-from-image (filepath &key x y w h)
+  "Must provide all of X, Y, W and H to crop the image."
+  (let ((surface
+          (cut-surface (sdl2-image:load-image filepath) x y w h)))
+    (unless (eq (sdl2:surface-format-format surface) sdl2:+pixelformat-bgra32+)
+      ;; We store canvas data in BGRA format, for some reason. Gotta convert.
+      (let ((old-surface surface))
+        (setf surface
+              (sdl2:convert-surface-format old-surface sdl2:+pixelformat-bgra32+))
+        (sdl2:free-surface old-surface)))
+    (let ((canvas (make-canvas (sdl2:surface-width surface)
+                               (sdl2:surface-height surface))))
+      (%with-canvas-ptr (ptr canvas)
+        (memcpy ptr
+                (sdl2:surface-pixels surface)
+                (* 4
+                   (canvas-width canvas)
+                   (canvas-height canvas)))
+        (sdl2:free-surface surface))
+      canvas)))
+
 (defmethod canvas-reset ((canvas canvas))
   (setf (%canvas-vector canvas)
         (cffi:make-shareable-byte-vector (* (canvas-width canvas) (canvas-height canvas) 4))))
