@@ -211,7 +211,11 @@
                 (t (rgb 0 0 0))))
   (with-font (make-error-font)
     (with-identity-matrix
-      (text (format nil "Error in ~A~%---~%~a~%---~%Click for restarts." stage error) 20 20)))
+      (text (format nil "Error in ~A~%---~%~a~%---~%Click for restarts." stage error)
+            20
+            (if (= +1 (env-y-axis-sgn *env*))
+                20
+                (- (sketch-height sketch) 20)))))
   (setf (env-red-screen *env*) t))
 
 (defmacro with-error-handling ((sketch) &body body)

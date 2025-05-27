@@ -81,7 +81,7 @@
                    (+ y top)
                    (* (first scale) (image-width resource))
                    (* (second scale) (image-height resource)))
-            (incf top (* (second scale) spacing))
+            (incf top (* (env-y-axis-sgn *env*) (second scale) spacing))
             (gl:delete-textures (list (image-texture resource)))))))))
 
 (let ((font))
