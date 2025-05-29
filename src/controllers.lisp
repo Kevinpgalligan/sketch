@@ -137,13 +137,6 @@ x & y are assumed to come last in the argument list."
        :mouse-wheel-x x
        :mouse-wheel-y y))
 
-(defmethod kit.sdl2:mousebutton-event :after ((instance sketch-window)
-                                              state timestamp button x y)
-  (with-slots (%env) (%sketch instance)
-    (when (env-red-screen %env)
-      (when (eq state :mousebuttonup)
-        (setf (env-debug-key-pressed %env) t)))))
-
 ;;; Keyboard
 
 (defmethod on-text (instance text))
