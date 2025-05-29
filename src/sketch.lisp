@@ -193,53 +193,18 @@
 
 ;;; Error handling
 
-(defvar *%unwind-and-call-on-error-function*)
-(defmacro unwind-and-call-on-error () `(funcall *%unwind-and-call-on-error-function*))
-
-(defmethod on-error-handler ((sketch sketch) stage error)
-  (declare (ignorable sketch stage))
-  (when (env-debug-key-pressed *env*)
-    (with-simple-restart (:red-screen "Show red screen")
-      (signal error)))
-  (unwind-and-call-on-error))
-
-(defmethod on-error ((sketch sketch) stage error)
-  (declare (ignorable sketch))
+(defun display-error (sketch stage error)
   (background (case stage
                 (:setup (rgb 0.4 0.2 0.1))
                 (:draw (rgb 0.7 0 0))
                 (t (rgb 0 0 0))))
   (with-font (make-error-font)
     (with-identity-matrix
-      (text (format nil "Error in ~A~%---~%~a~%---~%Click for restarts." stage error)
+      (text (format nil "Error in ~A~%---~%~a~%---~%Select a restart." stage error)
             20
             (if (= +1 (env-y-axis-sgn *env*))
                 20
-                (- (sketch-height sketch) 20)))))
-  (setf (env-red-screen *env*) t))
-
-(defmacro with-error-handling ((sketch) &body body)
-  (alexandria:with-gensyms (%error %stage)
-    `(let (,%error ,%stage)
-       (tagbody
-          (handler-bind ((error
-                           (lambda (e)
-                             (setf ,%error e)
-                             (let ((*%unwind-and-call-on-error-function*
-                                     (lambda () (go :error))))
-                               (on-error-handler ,sketch
-                                                 ,%stage
-                                                 ,%error)))))
-            (macrolet ((with-stage (stage &body body)
-                         `(progn
-                            (setf ,',%stage ,stage)
-                            ,@body)))
-              ,@body)
-            (go :end))
-        :error
-          (on-error ,sketch ,%stage ,%error)
-        :end
-          (setf (env-debug-key-pressed *env*) nil)))))
+                (- (sketch-height sketch) 20))))))
 
 ;;; Rendering
 
@@ -270,33 +235,55 @@
   (maybe-change-viewport sketch)
   (with-sketch (sketch)
     (with-gl-draw
-        (with-error-handling (sketch)
-          (when (copying-pixels-p sketch)
-            (gl:bind-framebuffer :framebuffer (env-fbo *env*)))
-          (unless (sketch-copy-pixels sketch)
-            (background (gray 0.4)))
-          (when (or (env-red-screen *env*)
-                    (not (sketch-%setup-called sketch)))
-            (setf (env-red-screen *env*) nil
-                  (sketch-%setup-called sketch) t)
-            (with-stage :setup
-              (setup sketch)
+      (let (stage)
+        (macrolet ((with-stage (stage-value &body body)
+                     `(progn
+                        (setf stage ,stage-value)
+                        ,@body
+                        (setf stage nil))))
+          (handler-bind ((error
+                           (lambda (e)
+                             (display-error sketch stage e)
+                             ;; This is basically copied from the :after method
+                             ;; of kit.sdl2:render, as defined in sdl2kit. If
+                             ;; we don't do this (flush OpenGL and swap the
+                             ;; buffer), then the error message won't be shown
+                             ;; in the window. We don't have to worry about the
+                             ;; window getting swapped twice, because whatever
+                             ;; restart the user picks should skip the :after method.
+                             (gl:flush)
+                             (sdl2:gl-swap-window
+                              (kit.sdl2:sdl-window win)))))
+            (when (copying-pixels-p sketch)
+              (gl:bind-framebuffer :framebuffer (env-fbo *env*)))
+            (unless (sketch-copy-pixels sketch)
+              (background (gray 0.4)))
+            (when (not (sketch-%setup-called sketch))
+              (setf (sketch-%setup-called sketch) t)
+              (with-stage :setup
+                (setup sketch))
               (when (sketch-copy-pixels sketch)
-                (call-hooks sketch '%copy-pixels-post-setup-hooks))))
-          (with-stage :draw
-            (draw sketch))
-          (when (copying-pixels-p sketch) 
-            (gl:bind-framebuffer :framebuffer 0)
-            (gl:clear-color 0.0 0.0 0.0 1.0)
-            (gl:clear :color-buffer)
-            (gl:bind-framebuffer :read-framebuffer (env-fbo *env*))
-            (gl:bind-framebuffer :draw-framebuffer 0)
-            (with-slots (width height) sketch
-              (%gl:blit-framebuffer 0 0 width height
-                                    0 0 width height
-                                    '(:color-buffer-bit)
-                                    :nearest))
-            (gl:bind-framebuffer :framebuffer 0))))))
+                (call-hooks sketch '%copy-pixels-post-setup-hooks)))
+            (with-stage :draw
+              (draw sketch))
+            (when (copying-pixels-p sketch) 
+              (gl:bind-framebuffer :framebuffer 0)
+              (gl:clear-color 0.0 0.0 0.0 1.0)
+              (gl:clear :color-buffer)
+              (gl:bind-framebuffer :read-framebuffer (env-fbo *env*))
+              (gl:bind-framebuffer :draw-framebuffer 0)
+              (with-slots (width height) sketch
+                (%gl:blit-framebuffer 0 0 width height
+                                      0 0 width height
+                                      '(:color-buffer-bit)
+                                      :nearest))
+              (gl:bind-framebuffer :framebuffer 0))))))))
+
+(defmethod kit.sdl2:render :around ((win sketch-window))
+  (restart-case (call-next-method)
+    (reset-sketch ()
+      :report "Start the sketch from scratch."
+      (restart-sketch (%sketch win) nil))))
 
 ;;; Support for resizable windows
 
