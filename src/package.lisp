@@ -27,8 +27,8 @@
            :sketch-copy-pixels
            :sketch-y-axis
            :sketch-close-on
-           :sketch-restart-on-change
-           :sketch-restart-on
+           :sketch-reset-on-change
+           :sketch-reset-on
 
            :title
            :width
@@ -38,8 +38,9 @@
            :copy-pixels
            :y-axis
            :close-on
-           :restart-on-change
-           :restart-on
+           :reset-on-change
+           :reset-on
+           :reset-sketch
 
            :*default-width*
            :*default-height*

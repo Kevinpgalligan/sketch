@@ -25,7 +25,7 @@
     (text "Click to redraw!" 10 10)))
 
 (defmethod on-click ((indigo indigo) x y)
-  (background +indigo+)
+  (reset-sketch)
   (with-slots (inc lx ly) indigo
     (setf inc (+ (random 100) 1)
           lx (+ (random 100) 100)

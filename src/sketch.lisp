@@ -54,9 +54,9 @@
    (copy-pixels :initform nil :accessor sketch-copy-pixels :initarg :copy-pixels)
    (y-axis :initform :down :accessor sketch-y-axis :initarg :y-axis)
    (close-on :initform :escape :accessor sketch-close-on :initarg :close-on)
-   (restart-on-change :initform t :accessor sketch-restart-on-change
-                      :initarg :restart-on-change)
-   (restart-on :initform :f1 :accessor sketch-restart-on :initarg :restart-on)))
+   (reset-on-change :initform t :accessor sketch-reset-on-change
+                    :initarg :reset-on-change)
+   (reset-on :initform :f1 :accessor sketch-reset-on :initarg :reset-on)))
 
 (defun call-hooks (sketch hooks-sym)
   (loop for hook in (slot-value sketch hooks-sym)
@@ -183,14 +183,19 @@
 (defmethod update-instance-for-redefined-class :after
     ((instance sketch) added-slots discarded-slots property-list &rest initargs)
   (declare (ignore added-slots discarded-slots property-list))
-  (if (sketch-restart-on-change instance)
-      (restart-sketch instance initargs)
+  (if (sketch-reset-on-change instance)
+      (%reset-sketch instance initargs)
       (set-tweakable-slots instance)))
 
-(defun restart-sketch (instance initargs)
+(defun reset-sketch ()
+  "Reinitialize a sketch's state, and trigger its setup to be called again."
+  (when *sketch*
+    (%reset-sketch *sketch*)))
+
+(defun %reset-sketch (instance &optional initargs)
+  (setf (slot-value instance '%entities) (make-hash-table))
   (apply #'prepare instance initargs)
-  (setf (sketch-%setup-called instance) nil)
-  (setf (slot-value instance '%entities) (make-hash-table)))
+  (setf (sketch-%setup-called instance) nil))
 
 ;;; Error handling
 
@@ -289,7 +294,7 @@
   (restart-case (call-next-method)
     (reset-sketch ()
       :report "Start the sketch from scratch, reinitializing its state and doing the setup again."
-      (restart-sketch (%sketch win) nil))))
+      (%reset-sketch (%sketch win)))))
 
 ;;; Support for resizable windows
 
@@ -316,10 +321,10 @@
     (when (and (eql state :keyup)
                (eq (without-sdl2-scancode-prefix keysym) close-on))
       (kit.sdl2:close-window instance)))
-  (alexandria:when-let (restart-on (sketch-restart-on instance))
+  (alexandria:when-let (reset-on (sketch-reset-on instance))
     (when (and (eql state :keyup)
-               (eq (without-sdl2-scancode-prefix keysym) restart-on))
-      (restart-sketch instance nil))))
+               (eq (without-sdl2-scancode-prefix keysym) reset-on))
+      (%reset-sketch instance))))
 
 (defmethod close-window :before ((instance sketch-window))
   (with-environment (slot-value (%sketch instance) '%env)
