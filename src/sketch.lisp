@@ -170,6 +170,7 @@
                        :fullscreen (sketch-fullscreen instance)
                        :resizable (sketch-resizable instance)
                        :sketch instance))
+  (initialize-fbo instance)
   (initialize-environment instance)
   (initialize-gl instance)
   ;; These will have been added in the call to PREPARE.
@@ -200,7 +201,7 @@
                 (t (rgb 0 0 0))))
   (with-font (make-error-font)
     (with-identity-matrix
-      (text (format nil "Error in ~A~%---~%~a~%---~%Select a restart." stage error)
+      (text (format nil "Error in ~A:~%---~%~a~%---~%Select a restart." stage error)
             20
             (if (= +1 (env-y-axis-sgn *env*))
                 20
@@ -218,8 +219,10 @@
 (defmacro with-gl-draw (&body body)
   `(progn
      (start-draw)
-     ,@body
-     (end-draw)))
+     (unwind-protect
+          (progn
+            ,@body)
+       (end-draw))))
 
 (defun maybe-change-viewport (sketch)
   (with-slots (%env %viewport-changed width height) sketch
@@ -243,6 +246,9 @@
                         (setf stage nil))))
           (handler-bind ((error
                            (lambda (e)
+                             ;; Draw direct to screen, do NOT overwrite
+                             ;; the FBO that we use for copy-pixels.
+                             (gl:bind-framebuffer :framebuffer 0)
                              (display-error sketch stage e)
                              ;; This is basically copied from the :after method
                              ;; of kit.sdl2:render, as defined in sdl2kit. If
@@ -282,7 +288,7 @@
 (defmethod kit.sdl2:render :around ((win sketch-window))
   (restart-case (call-next-method)
     (reset-sketch ()
-      :report "Start the sketch from scratch."
+      :report "Start the sketch from scratch, reinitializing its state and doing the setup again."
       (restart-sketch (%sketch win) nil))))
 
 ;;; Support for resizable windows
