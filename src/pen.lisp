@@ -14,7 +14,9 @@
   (weight 1)
   (curve-steps 100)
   (winding-rule :nonzero
-   :type (member :odd :nonzero :positive :negative :abs-geq-two)))
+   :type (member :odd :nonzero :positive :negative :abs-geq-two))
+  (line-join :dynamic
+   :type (member :dynamic :miter :bevel)))
 
 (defmacro with-pen (pen &body body)
   (with-shorthand (pen make-pen)
@@ -36,7 +38,8 @@
             :fill (pen-stroke pen)
             :weight (pen-weight pen)
             :curve-steps (pen-curve-steps pen)
-            :winding-rule (pen-winding-rule pen)))
+            :winding-rule (pen-winding-rule pen)
+            :line-join (pen-line-join pen)))
 
 (defun background (color)
   "Fills the sketch window with COLOR."
