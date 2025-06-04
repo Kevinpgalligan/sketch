@@ -81,16 +81,16 @@ or look ugly, and should be swapped for another join algorithm.")
 
 (defun get-join-func (l1 l2)
   (let ((join-type (pen-line-join (env-pen *env*))))
-    (if (eq join-type :dynamic)
-        (let ((angle (interior-angle-between-lines l1 l2)))
-          (cond
-            ((< angle *bevel-join-min-angle*) #'simple-join)
-            ((< angle *miter-join-min-angle*) #'bevel-join)
-            (t #'miter-join)))
-        (case join-type
-          (:miter #'miter-join)
-          (:bevel #'bevel-join)
-          (t (error (format nil "Unknown join type '~a'" join-type)))))))
+    (case join-type
+      (:dynamic
+       (let ((angle (interior-angle-between-lines l1 l2)))
+         (cond
+           ((< angle *bevel-join-min-angle*) #'simple-join)
+           ((< angle *miter-join-min-angle*) #'bevel-join)
+           (t #'miter-join))))
+      (:miter #'miter-join)
+      (:bevel #'bevel-join)
+      (t (error (format nil "Unknown join type '~a'" join-type))))))
 
 (defun simple-join (l1 l2 l1-left l1-right l2-left l2-right)
   (declare (ignore l1 l2 l2-left l2-right))
