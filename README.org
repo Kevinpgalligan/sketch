@@ -183,7 +183,7 @@ Lines with =(line x1 y1 x2 y2)=:
     (line 400 0 0 400))
 #+END_SRC
 
-Lines with an arbitrary number of segments with =polyline=:
+Lines with an arbitrary number of segments with =polyline= (to adjust the line join algorithm, use the pen property =:line-join=):
 
 #+BEGIN_SRC lisp
   (defsketch tutorial ()
@@ -433,7 +433,7 @@ We can also change the thickness of the lines and shapes that we draw by changin
         (line 50 (* i 20) 350 (* i 20)))))
 #+END_SRC
 
-**** Curve-steps
+***** Curve-steps
 =:curve-steps= is used to change the smoothness (resolution) of curves like =#'bezier=.
 #+BEGIN_SRC lisp
   (defsketch curve-test
@@ -442,6 +442,26 @@ We can also change the thickness of the lines and shapes that we draw by changin
       (with-pen (make-pen :stroke +red+ :curve-steps (+ i 1)) ; as curve-step increases, curve becomes "smoother"
         (bezier 0 400 100 100 300 100 400 400))))
 #+END_SRC
+
+***** Line join
+=:line-join= is used to determine what sort of line join algorithm to use for joining line segments in a polyline. Valid options are =:dynamic=, =:bevel= and =:miter=. The =:dynamic= option tries to pick the best algorithm based on the angle between the line segments.
+
+An example showing line join selection in action. Pressing spacebar changes the angle between line segments in the polyline; it can be seen that the miter join starts to malfunction when the angle is small.
+
+#+BEGIN_SRC lisp
+  (defsketch line-join-test ((deg 0))
+    (translate (floor width 2) (floor height 2))
+    (let ((coords (list -100 0 0 0 (* 150 (cos deg)) (* 150 (sin deg)))))
+      (with-pen (:stroke +white+ :weight 5 :line-join :miter)
+        (apply #'polyline coords)))
+    (incf deg 0.1)
+    (stop-loop))
+
+  (defmethod on-key ((inst line-join-test) key state)
+    (when (and (eq key :space) (eq state :up))
+      (start-loop)))
+#+END_SRC
+
 
 *** Transforms
 The transforms =(translate dx dy)=, =(rotate angle &optional (cx 0) (cy 0))= and =(scale sx &optional sy (cx 0) (cy 0))= are available to change the view matrix that is applied to coordinates.
