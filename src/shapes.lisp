@@ -9,8 +9,7 @@
 ;;; |____/|_| |_/_/   \_\_|   |_____|____/
 
 
-(defparameter *bevel-join-min-angle* (radians 2))
-(defparameter *miter-join-min-angle* (radians 20)
+(defparameter *miter-join-min-angle* (radians 15)
   "The minimum angle below which miter join starts to show visual artifacts
 or look ugly, and should be swapped for another join algorithm.")
 
@@ -20,7 +19,7 @@ or look ugly, and should be swapped for another join algorithm.")
     (with-pen (make-pen :fill (pen-stroke (env-pen *env*)))
       (circle x y (/ weight 2)))))
 
-(defun make-line (x1 y1 x2 y2)
+(defun make-line-func (x1 y1 x2 y2)
   (let* ((a (atan (- y2 y1) (- x2 x1)))
          (w (/ (or (pen-weight (env-pen *env*)) 1) 2))
          (dx (* (sin a) w))
@@ -37,85 +36,138 @@ or look ugly, and should be swapped for another join algorithm.")
 (defun line (x1 y1 x2 y2)
   (declare (type real x1 y1 x2 y2))
   (with-pen (flip-pen (env-pen *env*))
-    (funcall (make-line x1 y1 x2 y2))))
+    (funcall (make-line-func x1 y1 x2 y2))))
 
-(defun make-polyline (&rest coordinates)
+(defun make-polyline-func (&rest coordinates)
   (multiple-value-bind (d+ d-)
       (div2-inexact (pen-weight (env-pen *env*)))
     (let ((lines (edges (group coordinates) nil)))
-      (multiple-value-bind (lefts rights)
-          (join-lines lines d+ (- d-))
+      (let ((triangle-strips (join-lines lines d+ (- d-))))
         (lambda ()
-          (draw-shape
-           :triangle-strip
-           (mix-lists lefts rights)
-           nil))))))
+          (loop for strip in triangle-strips
+                do (draw-shape
+                    :triangle-strip
+                    (mix-strip-vertices strip)
+                    nil)))))))
+
+(defclass triangle-strip ()
+  ((left-vertices
+    :initarg :left-vertices
+    :accessor left-vertices)
+   (right-vertices
+    :initarg :right-vertices
+    :accessor right-vertices)))
+
+(defun mix-strip-vertices (triangle-strip)
+  (mix-lists (left-vertices triangle-strip)
+             (right-vertices triangle-strip)))
 
 (defun join-lines (lines d+ d-)
-  (let* ((first-line (first lines))
-         ;; The first point of the first line gives the first point of the polyline.
-         (lefts (list (first (translate-line first-line d+))))
-         (rights (list (first (translate-line first-line d-)))))
-    (loop for (l1 . (l2 . rest)) on lines
-          while l1
-          do (if (null l2)
-                 ;; The last point of the last line gives the end of the polyline.
-                 (progn
-                   (push (second (translate-line l1 d+)) lefts)
-                   (push (second (translate-line l1 d-)) rights))
-                 ;; If not the last line, need to join these 2 lines using some
-                 ;; join algorithm.
-                 ;; See, for example:
-                 ;;   https://mattdesl.svbtle.com/drawing-lines-is-hard
-                 ;;   http://bluevoid.com/opengl/sig00/advanced00/notes/node290.html
-                 (let ((l1-left (translate-line l1 d+))
-                       (l1-right (translate-line l1 d-))
-                       (l2-left (translate-line l2 d+))
-                       (l2-right (translate-line l2 d-)))
-                   (multiple-value-bind (new-lefts new-rights)
-                       (funcall (get-join-func l1 l2)
-                                l1 l2 l1-left l1-right l2-left l2-right)
-                     (map nil (lambda (p) (push p lefts)) new-lefts)
-                     (map nil (lambda (p) (push p rights)) new-rights)))))
-    (values (reverse lefts) (reverse rights))))
+  "Returns a list of triangle strips that, together, make up the polyline."
+  (let* (strips
+         (first-line (first lines))
+         ;; The first point of the first line gives the first point
+         ;; of the polyline.
+         (lefts (list (line-start (translate-line first-line d+))))
+         (rights (list (line-start (translate-line first-line d-)))))
+    (flet ((make-strip ()
+             (make-instance 'triangle-strip
+                            :left-vertices (reverse lefts)
+                            :right-vertices (reverse rights))))
+      (loop for (l1 . (l2 . rest)) on lines
+            while l1
+            do (if (null l2)
+                   ;; The last point of the last line gives the end
+                   ;; of the polyline.
+                   (progn
+                     (push (line-end (translate-line l1 d+)) lefts)
+                     (push (line-end (translate-line l1 d-)) rights))
+                   ;; If not the last line, need to join these 2 lines using some
+                   ;; join algorithm.
+                   ;; See, for example:
+                   ;;   https://mattdesl.svbtle.com/drawing-lines-is-hard
+                   ;;   http://bluevoid.com/opengl/sig00/advanced00/notes/node290.html
+                   (let ((l1-left (translate-line l1 d+))
+                         (l1-right (translate-line l1 d-))
+                         (l2-left (translate-line l2 d+))
+                         (l2-right (translate-line l2 d-))
+                         (angle (calc-line-segments-interior-angle l1 l2)))
+                     (multiple-value-bind (new-lefts new-rights new-strip?)
+                         (funcall (get-join-func angle)
+                                  l1 l2 l1-left l1-right l2-left l2-right angle)
+                       (map nil (lambda (p) (push p lefts)) new-lefts)
+                       (map nil (lambda (p) (push p rights)) new-rights)
+                       ;; The join function can indicate that we should
+                       ;; start a new triangle strip. In this case, we have
+                       ;; to treat the left vertices it returns as the new
+                       ;; right vertices, and vice versa. This is specifically
+                       ;; to make sure that the vertices returned by bevel join
+                       ;; will form a triangle strip that fills the polyline.
+                       ;; (See BEVEL-JOIN).
+                       (when new-strip?
+                         (push (make-strip) strips)
+                         (setf lefts new-rights)
+                         (setf rights new-lefts))))))
+      (cons (make-strip) strips))))
 
-(defun get-join-func (l1 l2)
+(defun get-join-func (angle)
   (let ((join-type (pen-line-join (env-pen *env*))))
     (case join-type
       (:dynamic
-       (let ((angle (interior-angle-between-lines l1 l2)))
-         (cond
-           ((< angle *bevel-join-min-angle*) #'simple-join)
-           ((< angle *miter-join-min-angle*) #'bevel-join)
-           (t #'miter-join))))
+       (if (< angle *miter-join-min-angle*)
+           #'bevel-join
+           #'miter-join))
       (:miter #'miter-join)
       (:bevel #'bevel-join)
       (t (error (format nil "Unknown join type '~a'" join-type))))))
 
-(defun simple-join (l1 l2 l1-left l1-right l2-left l2-right)
-  (declare (ignore l1 l2 l2-left l2-right))
-  (values (list (second l1-left)) (list (second l1-right))))
-
-(defun miter-join (l1 l2 l1-left l1-right l2-left l2-right)
-  (declare (ignore l1 l2))
+(defun miter-join (l1 l2 l1-left l1-right l2-left l2-right angle)
+  (declare (ignore l1 l2 angle))
   (values (list (intersect-lines l1-left l2-left))
           (list (intersect-lines l1-right l2-right))))
 
-(defun bevel-join (l1 l2 l1-left l1-right l2-left l2-right)
-  (if (let ((v1 (line-as-vector l1))
-            (v2 (line-as-vector l2)))
-        ;; Convert to coordinate system where v1 points along
-        ;; the positive x-axis. Then, if v2 is above the x-axis, we're at a
-        ;; left turn, and the left side of the line is interior.
-        ;; Thus, we intersect the left side and bevel the right side.
-        (< 0 (+ (* (second v1) (first v2))
-                (* (- (first v1)) (second v2)))))
-      (values (duplicate-list
-               (list (intersect-lines l1-left l2-left)))
-              (list (second l1-right) (first l2-right)))
-      (values (list (second l1-left) (first l2-left))
-              (duplicate-list
-               (list (intersect-lines l1-right l2-right))))))
+(defparameter *bevel-fallback-angle* (radians 20))
+
+(defun bevel-join (l1 l2 l1-left l1-right l2-left l2-right angle)
+  (let ((v1 (line-as-vector l1))
+        (v2 (line-as-vector l2))
+        (maybe-use-fallback? (< angle *bevel-fallback-angle*)))
+    ;; First, figure out whether it's a right or left turn.
+    ;; To do this: convert to coordinate system where v1 points along
+    ;; the positive x-axis. Then, if v2 is above the x-axis, we're at a
+    ;; left turn, and the left side of the line is interior.
+    (if (< 0 (+ (* (second v1) (first v2))
+                (* (- (first v1)) (second v2))))
+        ;; Left turn, so bevel the right side of the polyline and
+        ;; extend the left edges until they intersect.
+        ;; Unless... for sharp angles (as arbitrarily determined by
+        ;; *BEVEL-FALLBACK-ANGLE*) and thick polylines, sometimes the
+        ;; intersection falls outside the thickened line segments and
+        ;; this results in the triangle strip going outside the polyline.
+        ;; If we detect this to be the case, we resort to a fallback:
+        ;; end the current triangle strip (indicated by the third return
+        ;; value being T) and begin a new one. The end points of L1
+        ;; are used as the new start points, except the left & right
+        ;; point should be swapped so that the polyline is filled properly
+        ;; by the new triangle strip. (Draw it to understand why).
+        (if (or (not maybe-use-fallback?)
+                (line-segments-intersect? l1-left l2-left))
+            (values (duplicate-list (list (intersect-lines l1-left l2-left)))
+                    (list (line-end l1-right) (line-start l2-right))
+                    nil)
+            (values (list (line-end l1-left))
+                    (list (line-end l1-right))
+                    t))
+        ;; Right turn, so do the opposite.
+        (if (or (not maybe-use-fallback?)
+                (line-segments-intersect? l1-right l2-right))
+            (values (list (line-end l1-left) (line-start l2-left))
+                    (duplicate-list
+                     (list (intersect-lines l1-right l2-right)))
+                    nil)
+            (values (list (line-end l1-left))
+                    (list (line-end l1-right))
+                    t)))))
 
 (defun polyline (&rest coordinates)
   (case (pen-weight (env-pen *env*))
@@ -123,9 +175,9 @@ or look ugly, and should be swapped for another join algorithm.")
     (1 (mapcar (lambda (x) (line (caar x) (cadar x) (caadr x) (cadadr x)))
                (edges (group coordinates) nil)))
     (t (with-pen (flip-pen (env-pen *env*))
-         (funcall (apply #'make-polyline coordinates))))))
+         (funcall (apply #'make-polyline-func coordinates))))))
 
-(defun make-rect (x y w h)
+(defun make-rect-func (x y w h)
   (if (and (plusp w) (plusp h))
       (lambda ()
         (draw-shape
@@ -136,7 +188,7 @@ or look ugly, and should be swapped for another join algorithm.")
 
 (defun rect (x y w h)
   (declare (type real x y w h))
-  (funcall (make-rect x y w h)))
+  (funcall (make-rect-func x y w h)))
 
 (defun ngon-vertices (n cx cy rx ry &optional (angle 0))
   (let* ((angle (radians angle))
@@ -150,7 +202,7 @@ or look ugly, and should be swapped for another join algorithm.")
           and y = (* (sin angle) ry) then (* radial (- y (* x tangential)))
           collect `(,(+ x cx) ,(+ (* y-mul y) cy)))))
 
-(defun make-ngon (n cx cy rx ry &optional (angle 0))
+(defun make-ngon-func (n cx cy rx ry &optional (angle 0))
   (let ((vertices (ngon-vertices n cx cy rx ry angle)))
     (lambda ()
       (draw-shape :triangle-fan vertices vertices))))
@@ -158,9 +210,9 @@ or look ugly, and should be swapped for another join algorithm.")
 (defun ngon (n cx cy rx ry &optional (angle 0))
   (declare (type fixnum n)
            (type real cx cy rx ry angle))
-  (funcall (make-ngon n cx cy rx ry angle)))
+  (funcall (make-ngon-func n cx cy rx ry angle)))
 
-(defun make-star (n cx cy ra rb &optional (angle 0))
+(defun make-star-func (n cx cy ra rb &optional (angle 0))
   (let ((vertices (mix-lists (ngon-vertices n cx cy ra ra (+ 90 angle))
                              (ngon-vertices n cx cy rb rb (- (+ 90 angle) (/ 180 n))))))
     (lambda ()
@@ -173,7 +225,7 @@ or look ugly, and should be swapped for another join algorithm.")
 (defun star (n cx cy ra rb &optional (angle 0))
   (declare (type fixnum n)
            (type real cx cy ra rb angle))
-  (funcall (make-star n cx cy ra rb angle)))
+  (funcall (make-star-func n cx cy ra rb angle)))
 
 (defun ellipse (cx cy rx ry)
   (declare (type real cx cy rx ry))

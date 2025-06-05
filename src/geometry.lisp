@@ -8,6 +8,14 @@
 ;;; | |_| | |__| |_| | |  | | |___  | | |  _ < | |
 ;;;  \____|_____\___/|_|  |_|_____| |_| |_| \_\|_|
 
+(defun make-point (x y)
+  (list x y))
+(defun point-x (p) (first p))
+(defun point-y (p) (second p))
+(defun point-subtract (p1 p2)
+  (make-point (- (point-x p1) (point-x p2))
+              (- (point-y p1) (point-y p2))))
+
 (defun edges (vertices &optional (closed t))
   (loop
      for i in (if closed
@@ -17,6 +25,15 @@
                   vertices
                   (cdr vertices))
      collect (list i j)))
+
+(defun make-line (point1 point2)
+  (list point1 point2))
+
+(defun line-start (line)
+  (first line))
+
+(defun line-end (line)
+  (second line))
 
 (defmacro with-lines (lines &body body)
   (flet ((i-to-s (i) (format nil "~a" i)))
@@ -81,43 +98,77 @@
         maximize x into max-x
         minimize y into min-y
         maximize y into max-y
-        finally (return (list (list min-x min-y) (list max-x max-y)))))
+        finally (return (make-bounding-box min-x min-y max-x max-y))))
+
+(defun make-bounding-box (min-x min-y max-x max-y)
+  (list (list min-x min-y) (list max-x max-y)))
+
+(defun bounding-box-min-x (bb)
+  (first (first bb)))
+
+(defun bounding-box-min-y (bb)
+  (second (first bb)))
+
+(defun bounding-box-max-x (bb)
+  (first (second bb)))
+
+(defun bounding-box-max-y (bb)
+  (second (second bb)))
 
 (defun normalize-to-bounding-box (box x y)
   (with-lines (box)
     (values (normalize x x1 x2)
             (normalize y y1 y2))))
 
-(defun angle-between-lines (l1 l2)
-  "Calculate angle between 2 lines in positive radians. Doesn't handle
-lines of length 0. Lines are lists of 2 points; points are lists of 2 coordinates."
-  (let ((v1 (line-as-vector l1))
-        (v2 (line-as-vector l2)))
-    ;; Ensure that input to acos is in range [-1,1].
-    (acos (max -1
-               (min 1
-                    (/ (dot-product v1 v2)
-                       (vector-length v1)
-                       (vector-length v2)))))))
+(defun intersect-bounding-boxes (bb1 bb2)
+  (and (range-intersects? (bounding-box-min-x bb1) (bounding-box-max-x bb1)
+                          (bounding-box-min-x bb2) (bounding-box-max-x bb2))
+       (range-intersects? (bounding-box-min-y bb1) (bounding-box-max-y bb1)
+                          (bounding-box-min-y bb2) (bounding-box-max-y bb2))
+       (make-bounding-box (max (bounding-box-min-x bb1) (bounding-box-min-x bb1))
+                          (max (bounding-box-min-y bb1) (bounding-box-min-y bb1))
+                          (min (bounding-box-max-x bb1) (bounding-box-max-x bb1))
+                          (min (bounding-box-max-y bb1) (bounding-box-max-y bb1)))))
+
+(defun range-intersects? (r1-lo r1-hi r2-lo r2-hi)
+  (not (or (< r1-hi r2-lo)
+           (< r2-hi r1-lo))))
+
+(defun bounding-box-contains? (bb point)
+  (and (<= (bounding-box-min-x bb)
+           (point-x point)
+           (bounding-box-max-x bb))
+       (<= (bounding-box-min-y bb)
+           (point-y point)
+           (bounding-box-max-y bb))))
+
+(defun line-segments-intersect? (l1 l2)
+  (let ((bb1 (bounding-box l1))
+        (bb2 (bounding-box l2)))
+    (let ((bb-intersection (intersect-bounding-boxes bb1 bb2)))
+      (and bb-intersection
+           (bounding-box-contains? bb-intersection (intersect-lines l1 l2))))))
+
+(defun calc-interior-angle (v1 v2)
+  "Calculates interior angle between two vectors, in positive radians.
+Result should be between 0 and pi."
+  (acos (max -1
+             (min 1
+                  (/ (dot-product v1 v2)
+                     (vector-length v1)
+                     (vector-length v2))))))
+
+(defun calc-line-segments-interior-angle (l1 l2)
+  "Takes two line segments L1 and L2 attached end-to-end, and
+calculates the interior angle between them."
+  (let* ((intersect (intersect-lines l1 l2))
+         (v1 (point-subtract (line-start l1) intersect))
+         (v2 (point-subtract (line-end l2) intersect)))
+    (calc-interior-angle v1 v2)))
 
 (defun dot-product (v1 v2)
   (+ (* (first v1) (first v2))
      (* (second v1) (second v2))))
-
-(defun interior-angle-between-lines (l1 l2)
-  "Calculate interior angle between 2 lines, in positive radians."
-  (angle-between-lines
-   l1
-   (if (< 0 (dot-product (line-as-vector l1) (line-as-vector l2)))
-       l2
-       (reverse-line l2))))
-
-(defun reverse-line (line)
-  (destructuring-bind ((x1 y1) (x2 y2)) line
-    (let ((dx (- x2 x1))
-          (dy (- y2 y1)))
-      (list (first line)
-            (list (- x1 dx) (- y1 dy))))))
 
 (defun vector-length (v)
   (destructuring-bind (x y) v
