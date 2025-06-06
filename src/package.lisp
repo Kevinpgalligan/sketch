@@ -115,6 +115,7 @@
            :pen-weight
            :pen-curve-steps
            :pen-winding-rule
+           :pen-line-join
            :make-pen
            :set-pen
            :copy-pen

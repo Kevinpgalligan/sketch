@@ -170,12 +170,17 @@ or look ugly, and should be swapped for another join algorithm.")
                     t)))))
 
 (defun polyline (&rest coordinates)
-  (case (pen-weight (env-pen *env*))
-    (nil nil)
-    (1 (mapcar (lambda (x) (line (caar x) (cadar x) (caadr x) (cadadr x)))
+  (let* ((pen (env-pen *env*))
+         (w (pen-weight pen)))
+    (cond
+      ((null w)
+       nil)
+      ((or (= 1 w) (eq :none (pen-line-join pen)))
+       (mapcar (lambda (x) (line (caar x) (cadar x) (caadr x) (cadadr x)))
                (edges (group coordinates) nil)))
-    (t (with-pen (flip-pen (env-pen *env*))
-         (funcall (apply #'make-polyline-func coordinates))))))
+      (t
+       (with-pen (flip-pen pen)
+         (funcall (apply #'make-polyline-func coordinates)))))))
 
 (defun make-rect-func (x y w h)
   (if (and (plusp w) (plusp h))

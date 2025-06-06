@@ -16,7 +16,7 @@
   (winding-rule :nonzero
    :type (member :odd :nonzero :positive :negative :abs-geq-two))
   (line-join :dynamic
-   :type (member :dynamic :miter :bevel)))
+   :type (member :dynamic :miter :bevel :none)))
 
 (defmacro with-pen (pen &body body)
   (with-shorthand (pen make-pen)
