@@ -159,35 +159,34 @@ Returns 4 values: R, G, B and A, which are integers in the range 0-255."
 (defun canvas-paint-gray255 (canvas x y amount)
   (canvas-paint-rgba255 canvas x y amount amount amount 255))
 
-(defmethod canvas-image ((canvas canvas)
-                         &key (min-filter :linear)
-                              (mag-filter :linear)
-                         &allow-other-keys)
-  (if (%canvas-locked canvas)
-      (%canvas-image canvas)
-      (%with-canvas-ptr (ptr canvas)
-        (make-image-from-surface
-         (sdl2:create-rgb-surface-with-format-from
-          ptr
-          (canvas-width canvas)
-          (canvas-height canvas)
-          32
-          (* 4 (canvas-width canvas))
-          :format sdl2:+pixelformat-argb8888+)
-         :min-filter min-filter
-         :mag-filter mag-filter))))
+(defun make-image-from-canvas (canvas &key (min-filter :linear) (mag-filter :linear))
+  (%with-canvas-ptr (ptr canvas)
+    (make-image-from-surface
+     (sdl2:create-rgb-surface-with-format-from
+      ptr
+      (canvas-width canvas)
+      (canvas-height canvas)
+      32
+      (* 4 (canvas-width canvas))
+      :format sdl2:+pixelformat-argb8888+)
+     :min-filter min-filter
+     :mag-filter mag-filter)))
 
 (defmethod canvas-lock ((canvas canvas)
                         &key (min-filter :linear)
-                             (mag-filter :linear)
+                          (mag-filter :linear)
                         &allow-other-keys)
-  (setf (%canvas-image canvas) (canvas-image canvas
-                                             :min-filter min-filter
-                                             :mag-filter mag-filter)
+  (when (%canvas-image canvas)
+    (free-resource (%canvas-image canvas)))
+  (setf (%canvas-image canvas) (make-image-from-canvas canvas :min-filter min-filter :mag-filter mag-filter)
         (%canvas-locked canvas) t))
 
 (defmethod canvas-unlock ((canvas canvas))
-  (setf (%canvas-locked canvas) nil))
+  ;; Since the image won't be used again, we can free it.
+  (when (%canvas-image canvas)
+    (free-resource (%canvas-image canvas)))
+  (setf (%canvas-image canvas) nil
+        (%canvas-locked canvas) nil))
 
 (defmethod draw ((canvas canvas)
                  &key (x 0) (y 0) width height mode
@@ -206,8 +205,15 @@ there instead.
 
 See: https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTexParameter.xhtml"
   (declare (ignore mode))
-  (draw (canvas-image canvas :min-filter min-filter :mag-filter mag-filter)
-        :x x
-        :y y
-        :width (or width (canvas-width canvas))
-        :height (or height (canvas-height canvas))))
+  (let ((img
+          (if (canvas-lock canvas)
+              (%canvas-image canvas)
+              (make-image-from-canvas canvas :min-filter min-filter :mag-filter mag-filter))))
+    (draw img
+          :x x
+          :y y
+          :width (or width (canvas-width canvas))
+          :height (or height (canvas-height canvas)))
+    (when (not (canvas-lock canvas))
+      ;; Need to free the image since it's not referenced outside this function.
+      (free-resource img))))
