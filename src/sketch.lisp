@@ -195,7 +195,8 @@
 (defun %reset-sketch (instance &optional initargs)
   (setf (slot-value instance '%entities) (make-hash-table))
   (apply #'prepare instance initargs)
-  (setf (sketch-%setup-called instance) nil))
+  (setf (sketch-%setup-called instance) nil)
+  (start-loop instance))
 
 ;;; Error handling
 
@@ -528,8 +529,8 @@
 (defun stop-loop ()
   (setf (sdl2.kit:idle-render (sketch-%window *sketch*)) nil))
 
-(defun start-loop ()
-  (setf (sdl2.kit:idle-render (sketch-%window *sketch*)) t))
+(defun start-loop (&optional (instance *sketch*))
+  (setf (sdl2.kit:idle-render (sketch-%window instance)) t))
 
 ;;; Backward compatibility.
 ;; Previously, the main `sketch` class inherited from
