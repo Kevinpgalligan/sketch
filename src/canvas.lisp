@@ -27,7 +27,7 @@
          (gl:bind-framebuffer :framebuffer ,old-fbo)))))
 
 (defmacro with-drawing-to-canvas ((canvas) &body body)
-  (alexandria:with-gensyms (fbo rbo y-axis old-y-axis ptr)
+  (alexandria:with-gensyms (fbo rbo ptr)
     (alexandria:once-only (canvas)
       `(with-slots ((,fbo %fbo)
                     (,rbo %rbo))
@@ -56,33 +56,26 @@
                (setf ,fbo nil ,rbo nil))
              (gl:bind-framebuffer :framebuffer 0)
              (gl:bind-renderbuffer :renderbuffer 0))
-           (let* ((,old-y-axis (sketch-y-axis *sketch*))
-                  (,y-axis (if (eq ,old-y-axis :up) :down :up)))
-             ;; If we were successful, bind the framebuffer so that
-             ;; all the drawing operations target it.
-             (when ,fbo
-               (gl:bind-framebuffer :framebuffer ,fbo)
-               ;; Draw upside-down because the output from read-pixels
-               ;; is upside-down.
-               (setf (sketch-y-axis *sketch*) ,y-axis)
-               (maybe-change-viewport *sketch*)
-               ;; First draw the canvas into the framebuffer so
-               ;; that the drawing operations layer on top of it.
-               (draw ,canvas))
+           ;; If we were successful, bind the framebuffer so that
+           ;; all the drawing operations target it.
+           (when ,fbo
+             (gl:bind-framebuffer :framebuffer ,fbo)
+             ;; First draw the canvas into the framebuffer so
+             ;; that the drawing operations layer on top of it.
+             (draw ,canvas)
              ;; Run the caller's drawing code.
              ,@body
              ;; Now read back the data from the FBO, copying it over to
              ;; the canvas.
-             (when ,fbo
-               (gl:bind-framebuffer :framebuffer ,fbo)
-               (%with-canvas-ptr (,ptr ,canvas)
-                 (%gl:read-pixels 0 0
-                                  (canvas-width ,canvas) (canvas-height ,canvas)
-                                  :bgra
-                                  :unsigned-byte
-                                  ,ptr))
-               (setf (sketch-y-axis *sketch*) ,old-y-axis)
-               (maybe-change-viewport *sketch*))))))))
+             (%with-canvas-ptr (,ptr ,canvas)
+               (%gl:read-pixels 0 0
+                                (canvas-width ,canvas) (canvas-height ,canvas)
+                                :bgra
+                                :unsigned-byte
+                                ,ptr))
+               ;; Except, read-pixels loads the contents from bottom to top, so it's
+               ;; upside down. Now need to flip the canvas contents vertically.
+               (flip-canvas ,canvas)))))))
 
 (defun canvas-get-pixel (canvas x y)
   "Fetches the pixel at coordinates (X, Y) from the canvas.
@@ -108,6 +101,22 @@ Returns 4 values: R, G, B and A, which are integers in the range 0-255."
   (dest :pointer)
   (src :pointer)
   (n :size))
+
+(defun flip-canvas (canvas)
+  "Flips canvas vertically (in-place)."
+  (%with-canvas-ptr (ptr canvas)
+    (let* ((row-bytes (* (canvas-width canvas) 4))
+           (tmp-buff (cffi:make-shareable-byte-vector row-bytes))
+           (n-rows (canvas-height canvas))
+           (last-row-ptr (cffi:inc-pointer ptr (* row-bytes (- n-rows 1)))))
+      (cffi:with-pointer-to-vector-data (tmp tmp-buff)
+        (loop repeat (truncate n-rows 2)
+              do (progn
+                   (memcpy tmp ptr row-bytes)
+                   (memcpy ptr last-row-ptr row-bytes)
+                   (memcpy last-row-ptr tmp row-bytes)
+                   (cffi:incf-pointer ptr row-bytes)
+                   (cffi:incf-pointer last-row-ptr (- row-bytes))))))))
 
 (defun make-canvas-from-image (filepath &key x y w h)
   "Must provide all of X, Y, W and H to crop the image."
