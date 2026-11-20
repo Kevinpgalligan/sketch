@@ -62,7 +62,10 @@
              (gl:bind-framebuffer :framebuffer ,fbo)
              ;; First draw the canvas into the framebuffer so
              ;; that the drawing operations layer on top of it.
-             (draw ,canvas)
+             ;; Need to make sure that there aren't any translations
+             ;; affecting where we draw the canvas.
+             (with-identity-matrix
+               (draw ,canvas))
              ;; Run the caller's drawing code.
              ,@body
              ;; Now read back the data from the FBO, copying it over to
