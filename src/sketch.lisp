@@ -67,16 +67,7 @@
     :initarg :sketch
     :accessor %sketch
     :documentation "The sketch associated with this window.")
-   (%closing :initform nil :accessor window-%closing)
-   (%loop-stopped :initform nil :accessor window-%loop-stopped)))
-
-;; Always enabled
-(defmethod kit.sdl2:render-enabled ((window sketch-window))
-  t)
-
-;; So don't do anything on SETF as well
-(defmethod (setf kit.sdl2:render-enabled) (value (window sketch-window))
-  value)
+   (%closing :initform nil :accessor window-%closing)))
 
  ;;; Non trivial sketch writers
 
@@ -242,63 +233,74 @@
   (and (sketch-copy-pixels sketch) (env-fbo *env*)))
 
 (defmethod kit.sdl2:render ((win sketch-window) &aux (sketch (%sketch win)))
-  ;; Render can be triggered by SDL even after we've disabled idle rendering.
-  (unless (window-%loop-stopped win)
-    (maybe-change-viewport sketch)
-    (with-sketch (sketch)
-      (with-gl-draw
-        (let (stage)
-          (macrolet ((with-stage (stage-value &body body)
-                       `(progn
-                          (setf stage ,stage-value)
-                          ,@body
-                          (setf stage nil))))
-            (handler-bind ((error
-                             (lambda (e)
-                               ;; Draw direct to screen, do NOT overwrite
-                               ;; the FBO that we use for copy-pixels.
-                               (gl:bind-framebuffer :framebuffer 0)
-                               (display-error sketch stage e)
-                               ;; This is basically copied from the :after method
-                               ;; of kit.sdl2:render, as defined in sdl2kit. If
-                               ;; we don't do this (flush OpenGL and swap the
-                               ;; buffer), then the error message won't be shown
-                               ;; in the window. We don't have to worry about the
-                               ;; window getting swapped twice, because whatever
-                               ;; restart the user picks should skip the :after method.
-                               (gl:flush)
-                               (sdl2:gl-swap-window
-                                (kit.sdl2:sdl-window win)))))
-              (when (copying-pixels-p sketch)
-                (gl:bind-framebuffer :framebuffer (env-fbo *env*)))
-              (unless (sketch-copy-pixels sketch)
-                (background (gray 0.4)))
-              (when (not (sketch-%setup-called sketch))
-                (setf (sketch-%setup-called sketch) t)
-                (with-stage :setup
-                  (setup sketch))
-                (when (sketch-copy-pixels sketch)
-                  (call-hooks sketch '%copy-pixels-post-setup-hooks)))
-              (with-stage :draw
-                (draw sketch))
-              (when (copying-pixels-p sketch) 
-                (gl:bind-framebuffer :framebuffer 0)
-                (gl:clear-color 0.0 0.0 0.0 1.0)
-                (gl:clear :color-buffer)
-                (gl:bind-framebuffer :read-framebuffer (env-fbo *env*))
-                (gl:bind-framebuffer :draw-framebuffer 0)
-                (with-slots (width height) sketch
-                  (%gl:blit-framebuffer 0 0 width height
-                                        0 0 width height
-                                        '(:color-buffer-bit)
-                                        :nearest))
-                (gl:bind-framebuffer :framebuffer 0)))))))))
+  (maybe-change-viewport sketch)
+  (with-sketch (sketch)
+    (with-gl-draw
+      (let (stage)
+        (macrolet ((with-stage (stage-value &body body)
+                     `(progn
+                        (setf stage ,stage-value)
+                        ,@body
+                        (setf stage nil))))
+          (handler-bind ((error
+                           (lambda (e)
+                             ;; Draw direct to screen, do NOT overwrite
+                             ;; the FBO that we use for copy-pixels.
+                             (gl:bind-framebuffer :framebuffer 0)
+                             (display-error sketch stage e)
+                             ;; This is basically copied from the :after method
+                             ;; of kit.sdl2:render, as defined in sdl2kit. If
+                             ;; we don't do this (flush OpenGL and swap the
+                             ;; buffer), then the error message won't be shown
+                             ;; in the window. We don't have to worry about the
+                             ;; window getting swapped twice, because whatever
+                             ;; restart the user picks should skip the :after method.
+                             (gl:flush)
+                             (sdl2:gl-swap-window
+                              (kit.sdl2:sdl-window win)))))
+            (when (copying-pixels-p sketch)
+              (gl:bind-framebuffer :framebuffer (env-fbo *env*)))
+            (unless (sketch-copy-pixels sketch)
+              (background (gray 0.4)))
+            (when (not (sketch-%setup-called sketch))
+              (setf (sketch-%setup-called sketch) t)
+              (with-stage :setup
+                (setup sketch))
+              (when (sketch-copy-pixels sketch)
+                (call-hooks sketch '%copy-pixels-post-setup-hooks)))
+            (with-stage :draw
+              (draw sketch))
+            (when (copying-pixels-p sketch) 
+              (gl:bind-framebuffer :framebuffer 0)
+              (gl:clear-color 0.0 0.0 0.0 1.0)
+              (gl:clear :color-buffer)
+              (gl:bind-framebuffer :read-framebuffer (env-fbo *env*))
+              (gl:bind-framebuffer :draw-framebuffer 0)
+              (with-slots (width height) sketch
+                (%gl:blit-framebuffer 0 0 width height
+                                      0 0 width height
+                                      '(:color-buffer-bit)
+                                      :nearest))
+              (gl:bind-framebuffer :framebuffer 0))))))))
 
 (defmethod kit.sdl2:render :around ((win sketch-window))
-  (restart-case (call-next-method)
+  (restart-case
+      (handler-bind
+          ((error
+            (lambda (e)
+              ;; We need to ensure that rendering continues after an error so
+              ;; that we're not just left with the error screen. sdl2kit currently
+              ;; disables rendering after an error, so we undo that here.
+              (set-window-rendering! win t)
+              (error e))))
+        (call-next-method))
     (reset-sketch ()
       :report "Start the sketch from scratch, reinitializing its state and doing the setup again."
       (%reset-sketch (%sketch win)))))
+
+(defun set-window-rendering! (win v)
+  (setf (sdl2.kit:render-enabled win) v)
+  (setf (sdl2.kit:idle-render win) v))
 
 ;;; Support for resizable windows
 
@@ -530,14 +532,10 @@
 ;;; Control flow
 
 (defun stop-loop ()
-  (let ((win (sketch-%window *sketch*)))
-    (setf (window-%loop-stopped win) t)
-    (setf (sdl2.kit:idle-render win) nil)))
+  (set-window-rendering! (sketch-%window *sketch*) nil))
 
 (defun start-loop (&optional (instance *sketch*))
-  (let ((win (sketch-%window instance)))
-    (setf (window-%loop-stopped win) nil)
-    (setf (sdl2.kit:idle-render (sketch-%window instance)) t)))
+  (set-window-rendering! (sketch-%window instance) t))
 
 ;;; Backward compatibility.
 ;; Previously, the main `sketch` class inherited from
